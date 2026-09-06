@@ -1,0 +1,58 @@
+name: مراقبة مناقصات السفر والسياحة
+
+on:
+  schedule:
+    # يعمل يومياً الساعة 07:00 بتوقيت ليبيا (UTC+2) = 05:00 بتوقيت UTC
+    - cron: "0 5 * * *"
+  workflow_dispatch:        # يسمح بالتشغيل اليدوي بضغطة زر من الهاتف
+
+# صلاحية الكتابة لازمة لإيداع ملف الحالة الذي يمنع تكرار التنبيهات
+permissions:
+  contents: write
+
+# يمنع تداخل تشغيلين في وقت واحد وما قد ينتج عنه من تعارض عند الإيداع
+concurrency:
+  group: tenders-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: جلب المستودع
+        uses: actions/checkout@v4
+
+      - name: تهيئة بيئة بايثون
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: تثبيت المكتبات
+        run: pip install -r requirements.txt
+
+      - name: تشغيل الاختبارات
+        run: python -m unittest discover -s tests
+
+      - name: فحص المنصة وإرسال التنبيهات
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          KEYWORDS: ${{ vars.KEYWORDS }}
+          MIN_SCORE: ${{ vars.MIN_SCORE }}
+        run: python main.py
+
+      - name: إيداع ملف الحالة
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          if git diff --staged --quiet; then
+            echo "لا تغيير في ملف الحالة."
+          else
+            git commit -m "chore: تحديث حالة الإعلانات المُنبَّه عنها [skip ci]"
+            # الدفع الصريح إلى الفرع الحالي، تفادياً للفشل في حالة detached HEAD
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
