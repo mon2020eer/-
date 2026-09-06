@@ -53,5 +53,6 @@ jobs:
             echo "لا تغيير في ملف الحالة."
           else
             git commit -m "chore: تحديث حالة الإعلانات المُنبَّه عنها [skip ci]"
-            git push
+            # الدفع الصريح إلى الفرع الحالي، تفادياً للفشل في حالة detached HEAD
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
