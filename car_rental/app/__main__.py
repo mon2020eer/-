@@ -42,6 +42,12 @@ def _bootstrap(data_dir=None):
     config.reload_paths()
     config.ensure_directories()
     db.initialize()
+
+    # مرور الوقت وحده يغيّر حالة الأسطول: حجز الغد يصير إيجار اليوم، وعقد انتهى
+    # أمس يترك سيارته متاحة — وقد يقع ذلك والتطبيق مغلق.
+    from .repositories import vehicles_repo
+
+    vehicles_repo.sync_all_statuses()
     return config
 
 

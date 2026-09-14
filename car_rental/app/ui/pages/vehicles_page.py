@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from ... import config
 from ...core import money, session
 from ...repositories import settings_repo, vehicles_repo
+from ...services import pricing
 from ..widgets.common import (
     Card, DataTable, PageHeader, combo, confirm, fix_dates, money_field,
     primary_button, search_box, show_error, show_info,
@@ -42,6 +43,7 @@ class VehicleDialog(QDialog):
         self.color = QLineEdit()
         self.daily_rate = money_field()
         self.weekly_rate = money_field()
+        self.hourly_rate = money_field()
         self.currency = combo(
             [(row["code"], "%s (%s)" % (row["name_ar"], row["symbol"]))
              for row in settings_repo.list_currencies()]
@@ -62,6 +64,7 @@ class VehicleDialog(QDialog):
         form.addRow("اللون *", self.color)
         form.addRow("السعر اليومي *", self.daily_rate)
         form.addRow("السعر الأسبوعي (اتركه صفراً إن لم يوجد)", self.weekly_rate)
+        form.addRow("سعر الساعة (اتركه صفراً للاحتساب التلقائي)", self.hourly_rate)
         form.addRow("العملة", self.currency)
         form.addRow("قراءة العدّاد", self.odometer)
         form.addRow("رقم الشاصي", self.chassis)
@@ -71,7 +74,9 @@ class VehicleDialog(QDialog):
 
         hint = QLabel(
             "السعر الأسبوعي يُطبَّق تلقائياً على كل أسبوع كامل من مدّة العقد،"
-            " ولن يدفع العميل عن أيام متبقّية أكثر من ثمن أسبوع كامل."
+            " ولن يدفع العميل عن أيام متبقّية أكثر من ثمن أسبوع كامل.\n"
+            "وسعر الساعة يُستعمل عند الإرجاع المبكّر؛ إن تُرك صفراً حُسب تلقائياً"
+            " بقسمة السعر اليومي على 24."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -98,6 +103,7 @@ class VehicleDialog(QDialog):
         self.color.setText(row["color"] or "")
         self.daily_rate.setValue(float(money.to_major(row["daily_rate"])))
         self.weekly_rate.setValue(float(money.to_major(row["weekly_rate"])))
+        self.hourly_rate.setValue(float(money.to_major(row["hourly_rate"])))
         self.odometer.setValue(int(row["odometer"] or 0))
         self.chassis.setText(row["chassis_number"] or "")
         self.notes.setPlainText(row["notes"] or "")
@@ -115,6 +121,7 @@ class VehicleDialog(QDialog):
             "color": self.color.text().strip(),
             "daily_rate": money.to_minor(self.daily_rate.value()),
             "weekly_rate": money.to_minor(self.weekly_rate.value()),
+            "hourly_rate": money.to_minor(self.hourly_rate.value()),
             "currency_code": self.currency.currentData(),
             "odometer": self.odometer.value(),
             "chassis_number": self.chassis.text().strip() or None,
@@ -222,6 +229,20 @@ class VehiclesPage(QWidget):
         detail_card.body.addWidget(self.detail_title)
         detail_card.body.addWidget(self.detail_body)
         detail_card.body.addLayout(buttons)
+        self.reservations_label = QLabel("الحجوزات القادمة")
+        self.reservations_table = DataTable(
+            [
+                ("contract_number", "رقم العقد"),
+                ("customer_name", "العميل"),
+                ("start_date", "من"),
+                ("expected_end_date", "إلى"),
+            ],
+            stretch_column=1,
+        )
+        self.reservations_table.setMaximumHeight(140)
+
+        detail_card.body.addWidget(self.reservations_label)
+        detail_card.body.addWidget(self.reservations_table)
         detail_card.body.addWidget(QLabel("سجلّ عقود السيارة"))
         detail_card.body.addWidget(self.history_table)
         detail_card.body.addStretch(1)
@@ -260,6 +281,7 @@ class VehiclesPage(QWidget):
             self.detail_title.setText("اختر سيارة لعرض تفاصيلها")
             self.detail_body.setText("")
             self.history_table.fill([])
+            self.reservations_table.fill([])
             self._set_detail_enabled(False)
             return
 
@@ -269,7 +291,8 @@ class VehiclesPage(QWidget):
         )
         self.detail_body.setText(fix_dates(
             "الحالة: %s\nسنة الصنع: %s\nاللون: %s\nالعدّاد: %s كم\n"
-            "السعر اليومي: %s\nالسعر الأسبوعي: %s\nرقم الشاصي: %s\nملاحظات: %s"
+            "السعر اليومي: %s\nالسعر الأسبوعي: %s\nسعر الساعة: %s\n"
+            "رقم الشاصي: %s\nملاحظات: %s"
             % (
                 config.VEHICLE_STATUS_LABELS.get(vehicle["status"], ""),
                 vehicle["year"],
@@ -278,10 +301,21 @@ class VehiclesPage(QWidget):
                 money.format_amount(vehicle["daily_rate"], symbol),
                 money.format_amount(vehicle["weekly_rate"], symbol)
                 if vehicle["weekly_rate"] else "—",
+                money.format_amount(
+                    int(vehicle["hourly_rate"] or 0)
+                    or pricing.default_hourly_rate(vehicle["daily_rate"]), symbol
+                ) + ("" if vehicle["hourly_rate"] else " (تلقائي)"),
                 vehicle["chassis_number"] or "—",
                 vehicle["notes"] or "—",
             )
         ))
+
+        reservations = vehicles_repo.upcoming_reservations(vehicle["id"])
+        self.reservations_table.fill(reservations)
+        self.reservations_label.setText(
+            "الحجوزات القادمة (%d)" % len(reservations) if reservations
+            else "الحجوزات القادمة — لا يوجد"
+        )
 
         self.history_table.fill(vehicles_repo.history(vehicle["id"]))
         self._set_detail_enabled(True, vehicle["status"])

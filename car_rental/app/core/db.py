@@ -113,7 +113,16 @@ def initialize(conn=None):
     from . import migrations, seed
 
     conn = conn or get_connection()
-    conn.executescript(_SCHEMA_FILE.read_text(encoding="utf-8"))
-    migrations.apply(conn)
+    script = _SCHEMA_FILE.read_text(encoding="utf-8")
+
+    conn.executescript(script)                      # ينشئ ما ينقص
+    before = migrations.current_version(conn)
+    after = migrations.apply(conn)                  # يعدّل الأعمدة ويُسقط ما بطل
+
+    # ترقية قد تُسقط عرضاً يعتمد على أعمدة تغيّرت، فيُعاد بناء المخطط بعدها.
+    # كل عبارات المخطط ``IF NOT EXISTS`` فإعادة تشغيلها بلا أثر جانبي.
+    if after != before:
+        conn.executescript(script)
+
     seed.ensure_baseline(conn)
     return conn

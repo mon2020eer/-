@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS vehicles (
     color         TEXT    NOT NULL,
     daily_rate    INTEGER NOT NULL CHECK (daily_rate >= 0),
     weekly_rate   INTEGER NOT NULL DEFAULT 0 CHECK (weekly_rate >= 0),  -- 0 = لا سعر أسبوعي
+    -- سعر الساعة للإرجاع المبكّر. 0 = يُحتسب تلقائياً من السعر اليومي ÷ 24
+    hourly_rate   INTEGER NOT NULL DEFAULT 0 CHECK (hourly_rate >= 0),
     currency_code TEXT    NOT NULL REFERENCES currencies (code),
     status        TEXT    NOT NULL DEFAULT 'available'
                           CHECK (status IN ('available', 'rented', 'maintenance')),
@@ -108,12 +110,20 @@ CREATE TABLE IF NOT EXISTS contracts (
     start_date          TEXT    NOT NULL,             -- YYYY-MM-DD
     expected_end_date   TEXT    NOT NULL,
     actual_end_date     TEXT,
+    -- أوقات الاستلام والتسليم (HH:MM): تلزم عند الاحتساب بالساعة
+    start_time          TEXT    NOT NULL DEFAULT '12:00',
+    actual_end_time     TEXT,
 
     daily_rate_snapshot  INTEGER NOT NULL CHECK (daily_rate_snapshot >= 0),
     weekly_rate_snapshot INTEGER NOT NULL DEFAULT 0 CHECK (weekly_rate_snapshot >= 0),
+    hourly_rate_snapshot INTEGER NOT NULL DEFAULT 0 CHECK (hourly_rate_snapshot >= 0),
     currency_code        TEXT    NOT NULL REFERENCES currencies (code),
     rate_to_base         INTEGER NOT NULL CHECK (rate_to_base > 0),
 
+    -- طريقة الاحتساب النهائية: بالأيام، أو بالأيام والساعات عند الإرجاع المبكّر
+    billing_mode        TEXT    NOT NULL DEFAULT 'daily'
+                                CHECK (billing_mode IN ('daily', 'hourly')),
+    hours_count         INTEGER NOT NULL DEFAULT 0 CHECK (hours_count >= 0),
     days_count          INTEGER NOT NULL CHECK (days_count >= 1),
     subtotal            INTEGER NOT NULL CHECK (subtotal >= 0),
     discount            INTEGER NOT NULL DEFAULT 0 CHECK (discount >= 0),
@@ -234,12 +244,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
 --  الفهارس
 -- =============================================================================
 
--- الضمانة الجوهرية ضد الحجز المزدوج: سيارة واحدة لا تحتمل عقدين مفتوحين.
--- فهرس فريد جزئي على مستوى محرّك SQLite نفسه، لا يمكن لأي واجهة تخطّيه.
-CREATE UNIQUE INDEX IF NOT EXISTS ux_vehicle_open_contract
-    ON contracts (vehicle_id) WHERE status = 'open';
-
 CREATE INDEX IF NOT EXISTS ix_contracts_customer   ON contracts (customer_id);
+CREATE INDEX IF NOT EXISTS ix_contracts_period
+    ON contracts (vehicle_id, start_date, expected_end_date);
 CREATE INDEX IF NOT EXISTS ix_contracts_vehicle    ON contracts (vehicle_id);
 CREATE INDEX IF NOT EXISTS ix_contracts_status     ON contracts (status, start_date);
 CREATE INDEX IF NOT EXISTS ix_contracts_start      ON contracts (start_date);
@@ -317,4 +324,57 @@ CREATE TRIGGER IF NOT EXISTS trg_users_updated
 AFTER UPDATE ON users FOR EACH ROW
 BEGIN
     UPDATE users SET updated_at = datetime('now', 'localtime') WHERE id = NEW.id;
+END;
+
+-- =============================================================================
+--  الضمانة الجوهرية: منع تداخل فترات التأجير
+--
+--  المكتب محدود عدد السيارات، فيحتاج أن يحجز السيارة نفسها لعميل قادم قبل أن
+--  يُعيدها العميل الحالي. ولذلك لا يُمنع تعدّد العقود المفتوحة على السيارة، بل
+--  يُمنع ما هو خطأ فعلاً: **تأجير السيارة نفسها لعميلين في الأيام نفسها**.
+--
+--  لماذا مشغّل لا فهرس فريد؟ لأن «عدم تداخل المدد» شرط بين صفّين لا يمكن التعبير
+--  عنه بفهرس. المشغّل يجعل الضمانة داخل محرّك SQLite نفسه، فيرفض الإدراج المتداخل
+--  حتى لو جاء بـ SQL خام يتجاوز طبقة الخدمة كلّها.
+--
+--  فترة الشغل نصف مفتوحة: [start_date, end_date) حيث
+--      end_date = COALESCE(actual_end_date, expected_end_date)
+--  ويُرفع إلى اليوم التالي للبداية إن تساويا (عقد اليوم الواحد يشغل يومه).
+--
+--  **يوم التسليم يوم تسليم مشترك**: من يُعيد السيارة يوم 5 تستطيع تسليمها لعميل
+--  آخر في اليوم نفسه، وهو عين ما يفعله المكتب فعلاً. ولذلك شرط التداخل صارم
+--  (<) لا متساهل (<=)، وإلّا لتعذّر تجديد العقد أو تسليم السيارة لعميل تالٍ.
+--
+--  العقود الملغاة لا تحجز شيئاً، فتُستثنى.
+-- =============================================================================
+CREATE TRIGGER IF NOT EXISTS trg_contracts_no_overlap_insert
+BEFORE INSERT ON contracts FOR EACH ROW
+WHEN NEW.status <> 'cancelled' AND EXISTS (
+    SELECT 1 FROM contracts c
+     WHERE c.vehicle_id = NEW.vehicle_id
+       AND c.status <> 'cancelled'
+       AND c.start_date < MAX(COALESCE(NEW.actual_end_date, NEW.expected_end_date),
+                              date(NEW.start_date, '+1 day'))
+       AND NEW.start_date < MAX(COALESCE(c.actual_end_date, c.expected_end_date),
+                                date(c.start_date, '+1 day'))
+)
+BEGIN
+    SELECT RAISE(ABORT, 'contract_period_overlap');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_contracts_no_overlap_update
+BEFORE UPDATE OF vehicle_id, start_date, expected_end_date, actual_end_date, status
+ON contracts FOR EACH ROW
+WHEN NEW.status <> 'cancelled' AND EXISTS (
+    SELECT 1 FROM contracts c
+     WHERE c.vehicle_id = NEW.vehicle_id
+       AND c.id <> NEW.id
+       AND c.status <> 'cancelled'
+       AND c.start_date < MAX(COALESCE(NEW.actual_end_date, NEW.expected_end_date),
+                              date(NEW.start_date, '+1 day'))
+       AND NEW.start_date < MAX(COALESCE(c.actual_end_date, c.expected_end_date),
+                                date(c.start_date, '+1 day'))
+)
+BEGIN
+    SELECT RAISE(ABORT, 'contract_period_overlap');
 END;

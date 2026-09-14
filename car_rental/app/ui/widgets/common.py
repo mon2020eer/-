@@ -7,12 +7,12 @@
 
 import re
 
-from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtCore import QDate, Qt, QTime
 from PyQt6.QtGui import QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateEdit, QDoubleSpinBox, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableView,
-    QVBoxLayout, QWidget,
+    QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from ...core import money
@@ -280,6 +280,20 @@ def date_field(default=None):
     field.setCalendarPopup(True)
     field.setAlignment(Qt.AlignmentFlag.AlignCenter)
     field.setDate(default or QDate.currentDate())
+    return field
+
+
+def time_field(default="12:00"):
+    """حقل وقت بصيغة 24 ساعة.
+
+    الاتجاه يساراً-إلى-يمين للسبب نفسه الذي في حقل التاريخ: النقطتان محرف
+    محايد ينقلب في سياق عربي فيصير 08:30 معروضاً 30:08.
+    """
+    field = QTimeEdit()
+    field.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+    field.setDisplayFormat("HH:mm")
+    field.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    field.setTime(QTime.fromString(str(default or "12:00"), "HH:mm"))
     return field
 
 

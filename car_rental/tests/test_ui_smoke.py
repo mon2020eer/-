@@ -174,6 +174,102 @@ def test_new_contract_dialog_quotes_live(gui, conn):
     dialog.close()
 
 
+def test_edit_contract_dialog_builds_and_previews(gui, conn):
+    from app.repositories import contracts_repo
+    from app.ui.pages.contracts_page import EditContractDialog
+
+    contract = contracts_repo.search(status="open", limit=1, conn=conn)[0]
+    dialog = EditContractDialog(contract)
+    gui.processEvents()
+
+    assert "الإجمالي الجديد" in dialog.preview_label.text()
+    assert dialog.vehicle.count() >= 1
+    dialog.close()
+
+
+def test_renew_preset_fills_the_new_contract_dialog(gui, conn):
+    from app.repositories import contracts_repo
+    from app.ui.pages.contracts_page import NewContractDialog
+
+    contract = contracts_repo.search(status="open", limit=1, conn=conn)[0]
+    preset = {
+        "customer_id": contract["customer_id"],
+        "vehicle_id": contract["vehicle_id"],
+        "start_date": contract["expected_end_date"],
+        "start_time": contract["start_time"],
+        "days": 5,
+        "notes": "تجديد للعقد %s" % contract["contract_number"],
+    }
+
+    dialog = NewContractDialog(preset=preset)
+    gui.processEvents()
+
+    assert dialog.customer.currentData() == contract["customer_id"]
+    assert dialog.vehicle.currentData() == contract["vehicle_id"]
+    assert dialog.start_date.date().toString("yyyy-MM-dd") == contract["expected_end_date"]
+    assert contract["contract_number"] in dialog.notes.toPlainText()
+    dialog.close()
+
+
+def test_rented_vehicle_is_still_bookable_in_the_dialog(gui, conn):
+    """السيارة المؤجَّرة اليوم تظهر في قائمة العقد الجديد مع بيان انشغالها."""
+    from app.ui.pages.contracts_page import NewContractDialog
+
+    dialog = NewContractDialog()
+    gui.processEvents()
+
+    labels = [dialog.vehicle.itemText(i) for i in range(dialog.vehicle.count())]
+    assert any("مشغولة حتى" in label for label in labels)
+    dialog.close()
+
+
+def test_close_dialog_offers_hourly_settlement(gui, conn):
+    from app.repositories import contracts_repo
+    from app.ui.pages.contracts_page import CloseContractDialog
+
+    contract = contracts_repo.search(status="open", limit=1, conn=conn)[0]
+    dialog = CloseContractDialog(contract)
+    gui.processEvents()
+
+    assert not dialog.hourly.isChecked()          # الافتراضي بالأيام
+    daily_preview = dialog.preview.text()
+
+    dialog.hourly.setChecked(True)
+    gui.processEvents()
+    hourly_preview = dialog.preview.text()
+
+    assert "ساعة" in hourly_preview
+    assert hourly_preview != daily_preview
+    dialog.close()
+
+
+def test_customers_page_can_order_by_frequency(gui, conn):
+    from app.ui.pages.customers_page import CustomersPage
+
+    page = CustomersPage()
+    page.refresh()
+    gui.processEvents()
+
+    page.frequent_toggle.setChecked(True)
+    page.refresh()
+    gui.processEvents()
+
+    assert page.table.model_.rowCount() >= 1
+    headers = [page.table.model_.horizontalHeaderItem(i).text()
+               for i in range(page.table.model_.columnCount())]
+    assert "عدد العقود" in headers
+    page.deleteLater()
+
+
+def test_vehicle_dialog_has_hourly_rate(gui, conn):
+    from app.ui.pages.vehicles_page import VehicleDialog
+
+    dialog = VehicleDialog()
+    gui.processEvents()
+    assert dialog.hourly_rate is not None
+    dialog.close()
+
+
 def test_contract_pdf_is_generated(gui, conn, tmp_path):
     from app.repositories import contracts_repo
     from app.services import contract_pdf

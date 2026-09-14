@@ -31,27 +31,87 @@ def test_open_contract_marks_vehicle_rented(conn, admin, sample_customer, sample
     assert contract["payment_status"] == "due"
 
 
-def test_double_booking_is_refused(conn, admin, sample_customer, sample_vehicle):
-    start, end = _dates(2)
+def test_overlapping_period_is_refused(conn, admin, sample_customer, sample_vehicle):
+    """التداخل في الأيام نفسها مرفوض، والرسالة تسمّي العقد المتعارض."""
+    start, end = _dates(5)
     rental_service.open_contract(sample_customer, sample_vehicle, start, end, conn=conn)
+
+    overlap_start = (datetime.date.fromisoformat(start)
+                     + datetime.timedelta(days=2)).isoformat()
+    overlap_end = (datetime.date.fromisoformat(start)
+                   + datetime.timedelta(days=9)).isoformat()
 
     with pytest.raises(rental_service.RentalError) as error:
-        rental_service.open_contract(sample_customer, sample_vehicle, start, end, conn=conn)
-    assert "مؤجَّرة" in str(error.value)
+        rental_service.open_contract(
+            sample_customer, sample_vehicle, overlap_start, overlap_end, conn=conn
+        )
+
+    message = str(error.value)
+    assert "محجوزة" in message
+    assert "CR-" in message                      # تسمية العقد المتعارض
+    assert "محمد علي الشريف" in message          # وصاحبه
 
 
-def test_database_index_blocks_double_booking_even_bypassing_service(
+def test_advance_reservation_is_accepted(conn, admin, sample_customer, sample_vehicle):
+    """جوهر التغيير: السيارة المؤجَّرة اليوم تُحجَز لفترة لاحقة لا تتداخل.
+
+    مكتب محدود عدد السيارات يحتاج هذا فعلاً، ولا خطأ فيه: العميلان لا يستعملان
+    السيارة في اليوم نفسه.
+    """
+    today = datetime.date.today()
+    rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=3)).isoformat(), conn=conn,
+    )
+
+    second_id, second_number = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        (today + datetime.timedelta(days=5)).isoformat(),
+        (today + datetime.timedelta(days=9)).isoformat(),
+        conn=conn,
+    )
+
+    assert second_id
+    # عقدان مفتوحان على السيارة نفسها: ما كان ممكناً قبل هذا التغيير
+    open_count = conn.execute(
+        "SELECT COUNT(*) FROM contracts WHERE vehicle_id = ? AND status = 'open'",
+        (sample_vehicle,),
+    ).fetchone()[0]
+    assert open_count == 2
+
+    # والسيارة تبقى «مؤجَّرة» لأن العقد الجاري اليوم هو الأول، لا الحجز القادم
+    assert vehicles_repo.get(sample_vehicle, conn=conn)["status"] == "rented"
+    assert len(vehicles_repo.upcoming_reservations(sample_vehicle, conn=conn)) == 1
+    assert second_number.startswith("CR-")
+
+
+def test_handover_day_is_shared(conn, admin, sample_customer, sample_vehicle):
+    """يوم التسليم يصلح بدايةً لعقد تالٍ: من يُعيدها يوم 5 تُسلَّم لغيره يوم 5."""
+    today = datetime.date.today()
+    handover = (today + datetime.timedelta(days=3)).isoformat()
+
+    rental_service.open_contract(
+        sample_customer, sample_vehicle, today.isoformat(), handover, conn=conn
+    )
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, handover,
+        (today + datetime.timedelta(days=6)).isoformat(), conn=conn,
+    )
+    assert contract_id
+
+
+def test_database_trigger_blocks_overlap_even_bypassing_service(
     conn, admin, sample_customer, sample_vehicle
 ):
-    """خطّ الدفاع الأخير: الفهرس الفريد الجزئي في قاعدة البيانات نفسها.
+    """خطّ الدفاع الأخير: مشغّل منع التداخل داخل قاعدة البيانات نفسها.
 
-    نتجاوز طبقة الخدمة عمداً ونُدرج عقداً مفتوحاً ثانياً مباشرةً بـ SQL،
+    نتجاوز طبقة الخدمة عمداً ونُدرج عقداً متداخلاً مباشرةً بـ SQL،
     ويجب أن ترفضه قاعدة البيانات.
     """
-    start, end = _dates(2)
+    start, end = _dates(4)
     rental_service.open_contract(sample_customer, sample_vehicle, start, end, conn=conn)
 
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(sqlite3.IntegrityError) as error:
         conn.execute(
             """INSERT INTO contracts (
                     contract_number, customer_id, vehicle_id, start_date,
@@ -60,6 +120,145 @@ def test_database_index_blocks_double_booking_even_bypassing_service(
                VALUES ('CR-BYPASS', ?, ?, ?, ?, 1000, 'LYD', 1000000, 1, 1000, 1000, ?)""",
             (sample_customer, sample_vehicle, start, end, admin.id),
         )
+    assert "contract_period_overlap" in str(error.value)
+
+
+def test_trigger_allows_non_overlapping_raw_insert(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """المشغّل يمنع التداخل فقط، ولا يمنع الحجز المتتابع."""
+    today = datetime.date.today()
+    rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=2)).isoformat(), conn=conn,
+    )
+
+    conn.execute(
+        """INSERT INTO contracts (
+                contract_number, customer_id, vehicle_id, start_date,
+                expected_end_date, daily_rate_snapshot, currency_code,
+                rate_to_base, days_count, subtotal, total_amount, created_by)
+           VALUES ('CR-RAW-OK', ?, ?, ?, ?, 1000, 'LYD', 1000000, 1, 1000, 1000, ?)""",
+        (sample_customer, sample_vehicle,
+         (today + datetime.timedelta(days=10)).isoformat(),
+         (today + datetime.timedelta(days=12)).isoformat(), admin.id),
+    )
+    assert contracts_repo.get_by_number("CR-RAW-OK", conn=conn) is not None
+
+
+def test_status_follows_the_calendar_not_the_contract_count(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """حجز قادم وحده لا يجعل السيارة مؤجَّرة اليوم."""
+    today = datetime.date.today()
+    rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        (today + datetime.timedelta(days=4)).isoformat(),
+        (today + datetime.timedelta(days=8)).isoformat(),
+        conn=conn,
+    )
+    assert vehicles_repo.get(sample_vehicle, conn=conn)["status"] == "available"
+
+
+def test_update_contract_recalculates_and_checks_overlap(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """تعديل العقد يعيد الحساب، ويرفض التعديل الذي يصطدم بحجز قائم."""
+    today = datetime.date.today()
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=2)).isoformat(), conn=conn,
+    )
+    # حجز قادم يبدأ بعد 5 أيام
+    rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        (today + datetime.timedelta(days=5)).isoformat(),
+        (today + datetime.timedelta(days=8)).isoformat(), conn=conn,
+    )
+
+    # تمديد العقد الأول إلى 4 أيام: لا يصطدم بشيء
+    estimate = rental_service.update_contract(
+        contract_id,
+        expected_end_date=(today + datetime.timedelta(days=4)).isoformat(),
+        conn=conn,
+    )
+    assert estimate["days"] == 4
+    assert contracts_repo.get(contract_id, conn=conn)["days_count"] == 4
+
+    # تمديده إلى ما بعد بداية الحجز القادم: مرفوض
+    with pytest.raises(rental_service.RentalError):
+        rental_service.update_contract(
+            contract_id,
+            expected_end_date=(today + datetime.timedelta(days=7)).isoformat(),
+            conn=conn,
+        )
+
+
+def test_update_contract_can_swap_vehicle(conn, admin, sample_customer, sample_vehicle):
+    """تبديل السيارة في عقد قائم يزامن حالتَي السيارتين ويأخذ التعرفة الجديدة."""
+    replacement = vehicles_repo.create(
+        {
+            "brand": "مازدا", "model": "6", "year": 2022, "plate_number": "8-24680",
+            "color": "رمادي", "daily_rate": 20000, "weekly_rate": 0,
+            "currency_code": "LYD",
+        },
+        conn=conn,
+    )
+
+    today = datetime.date.today()
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=2)).isoformat(), conn=conn,
+    )
+
+    rental_service.update_contract(contract_id, vehicle_id=replacement, conn=conn)
+
+    contract = contracts_repo.get_raw(contract_id, conn=conn)
+    assert contract["vehicle_id"] == replacement
+    assert contract["daily_rate_snapshot"] == 20000
+    assert contract["total_amount"] == 2 * 20000
+    assert vehicles_repo.get(replacement, conn=conn)["status"] == "rented"
+    assert vehicles_repo.get(sample_vehicle, conn=conn)["status"] == "available"
+
+
+def test_update_contract_cannot_drop_below_paid(
+    conn, admin, sample_customer, sample_vehicle
+):
+    today = datetime.date.today()
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=5)).isoformat(),
+        deposit_amount=60000, conn=conn,
+    )
+
+    with pytest.raises(rental_service.RentalError) as error:
+        rental_service.update_contract(
+            contract_id,
+            expected_end_date=(today + datetime.timedelta(days=1)).isoformat(),
+            conn=conn,
+        )
+    assert "دفعه العميل" in str(error.value)
+
+
+def test_renew_contract_creates_a_new_following_contract(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """التجديد ينشئ عقداً جديداً يبدأ من انتهاء الحالي، بلا تداخل."""
+    today = datetime.date.today()
+    first_id, first_number = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=3)).isoformat(), conn=conn,
+    )
+
+    second_id, second_number = rental_service.renew_contract(first_id, days=4, conn=conn)
+
+    assert second_id != first_id
+    assert second_number != first_number
+
+    renewed = contracts_repo.get_raw(second_id, conn=conn)
+    assert renewed["start_date"] == (today + datetime.timedelta(days=3)).isoformat()
+    assert renewed["days_count"] == 4
+    assert first_number in (renewed["notes"] or "")
 
 
 def test_maintenance_vehicle_cannot_be_rented(conn, admin, sample_customer, sample_vehicle):
@@ -139,6 +338,90 @@ def test_close_contract_frees_vehicle_and_resettles(conn, admin, sample_customer
     assert result["total"] > before                      # التأخير زاد القيمة
     assert vehicles_repo.get(sample_vehicle, conn=conn)["status"] == "available"
     assert contracts_repo.get_raw(contract_id, conn=conn)["status"] == "closed"
+
+
+def test_close_contract_by_the_hour_on_early_return(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """الإرجاع المبكّر يُحتسب بالساعة لا بيوم كامل.
+
+    السيناريو الواقعي: عقد ثلاثة أيام، والعميل أعادها في اليوم الثاني ظهراً —
+    أي بعد 26 ساعة: يوم كامل وساعتان، لا ثلاثة أيام ولا يومان كاملان.
+    """
+    today = datetime.date.today()
+    start = (today - datetime.timedelta(days=1)).isoformat()
+
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        start, (today + datetime.timedelta(days=2)).isoformat(),
+        start_time="10:00", conn=conn,
+    )
+    before = contracts_repo.get(contract_id, conn=conn)["total_amount"]
+
+    result = rental_service.close_contract(
+        contract_id, actual_end_date=today.isoformat(),
+        actual_end_time="12:00", hourly=True, conn=conn,
+    )
+
+    assert result["mode"] == "hourly"
+    assert result["hours"] == 26                 # 24 + 2
+    assert result["full_days"] == 1
+    assert result["remainder_hours"] == 2
+    # يوم كامل (15000) + ساعتان بسعر الساعة (ceil(15000/24)=625 × 2)
+    assert result["total"] == 15000 + 2 * 625
+    assert result["total"] < before
+
+    closed = contracts_repo.get_raw(contract_id, conn=conn)
+    assert closed["billing_mode"] == "hourly"
+    assert closed["hours_count"] == 26
+    assert closed["actual_end_time"] == "12:00"
+
+
+def test_hourly_close_never_exceeds_a_full_day(conn, admin, sample_customer):
+    """سقف الإنصاف بالساعة: ساعات الكسر لا تُكلّف أكثر من يوم كامل.
+
+    السيارة هنا لها سعر ساعة صريح مرتفع (2000 والسعر اليومي 15000)، فلولا السقف
+    لصارت 15 ساعة (30000) أغلى من يومين كاملين.
+    """
+    vehicle = vehicles_repo.create(
+        {
+            "brand": "لكزس", "model": "ES", "year": 2024, "plate_number": "1-10101",
+            "color": "أبيض", "daily_rate": 15000, "weekly_rate": 0,
+            "hourly_rate": 2000, "currency_code": "LYD",
+        },
+        conn=conn,
+    )
+
+    today = datetime.date.today()
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=3)).isoformat(),
+        start_time="08:00", conn=conn,
+    )
+
+    result = rental_service.close_contract(
+        contract_id, actual_end_date=today.isoformat(),
+        actual_end_time="23:00", hourly=True, conn=conn,
+    )
+    assert result["hours"] == 15
+    assert result["total"] == 15000              # سعر يوم واحد، لا 30000
+
+
+def test_daily_close_is_still_the_default(conn, admin, sample_customer, sample_vehicle):
+    """الإغلاق المعتاد يبقى باليوم ما لم يُطلب غير ذلك."""
+    today = datetime.date.today()
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        (today - datetime.timedelta(days=2)).isoformat(),
+        (today + datetime.timedelta(days=1)).isoformat(), conn=conn,
+    )
+
+    result = rental_service.close_contract(
+        contract_id, actual_end_date=today.isoformat(), conn=conn
+    )
+    assert result["mode"] == "daily"
+    assert result["days"] == 2
+    assert contracts_repo.get_raw(contract_id, conn=conn)["billing_mode"] == "daily"
 
 
 def test_closed_vehicle_can_be_rented_again(conn, admin, sample_customer, sample_vehicle):

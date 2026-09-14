@@ -7,10 +7,10 @@
 
 import datetime
 
-from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtCore import QDate, Qt, QTime
 from PyQt6.QtWidgets import (
-    QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ... import config
@@ -21,39 +21,60 @@ from ...repositories import (
 from ...services import contract_pdf, pricing, rental_service
 from ..widgets.common import (
     Card, DataTable, PageHeader, combo, confirm, date_field, fix_dates,
-    money_field, primary_button, search_box, show_error, show_info,
+    money_field, primary_button, search_box, show_error, show_info, time_field,
 )
+
+
+def _customer_label(row):
+    """اسم العميل مع عدد عقوده — فيُعرف المتكرّر من القائمة مباشرةً."""
+    count = row["contracts_count"] if "contracts_count" in row.keys() else 0
+    suffix = " — %d عقود سابقة" % count if count else ""
+    return "%s — %s%s" % (row["full_name"], row["phone"], suffix)
+
+
+def _vehicle_label(row):
+    """وصف السيارة مع بيان انشغالها الحالي إن وُجد."""
+    title = "%s %s — %s" % (row["brand"], row["model"], row["plate_number"])
+    busy_until = row["busy_until"] if "busy_until" in row.keys() else None
+    if busy_until:
+        return "%s (مشغولة حتى %s)" % (title, busy_until)
+    return title
 
 
 class NewContractDialog(QDialog):
     """حوار فتح عقد إيجار جديد مع تسعيرة لحظية."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, preset=None):
         super().__init__(parent)
-        self.setWindowTitle("عقد إيجار جديد")
+        self.setWindowTitle("تجديد العقد" if preset else "عقد إيجار جديد")
         self.setMinimumWidth(560)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         self._vehicle = None
         self.created_id = None
+        preset = preset or {}
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
         form.setSpacing(10)
 
+        # العملاء مرتَّبون بالأكثر تعاملاً: من يتردّد على المكتب كثيراً يظهر أولاً
+        # ولا يُبحث عنه في كل مرّة.
         self.customer = combo(
-            [(row["id"], "%s — %s" % (row["full_name"], row["phone"]))
-             for row in customers_repo.search(limit=2000)
+            [(row["id"], _customer_label(row))
+             for row in customers_repo.search(limit=2000, order_by="frequent")
              if not row["is_blacklisted"]]
         )
 
+        # كل السيارات غير الخاضعة للصيانة قابلة للحجز — المؤجَّرة اليوم تُحجَز
+        # لفترة لاحقة، وهو جوهر عمل مكتب محدود عدد السيارات.
         self.vehicle = combo(
-            [(row["id"], "%s %s — %s" % (row["brand"], row["model"], row["plate_number"]))
-             for row in vehicles_repo.list_available()]
+            [(row["id"], _vehicle_label(row)) for row in vehicles_repo.list_bookable()]
         )
         self.vehicle.currentIndexChanged.connect(self._on_vehicle_changed)
 
         self.start_date = date_field()
+        self.start_time = time_field()
         self.end_date = date_field(QDate.currentDate().addDays(1))
         self.start_date.dateChanged.connect(self._recalculate)
         self.end_date.dateChanged.connect(self._recalculate)
@@ -77,6 +98,7 @@ class NewContractDialog(QDialog):
         form.addRow("العميل *", self.customer)
         form.addRow("السيارة *", self.vehicle)
         form.addRow("تاريخ الاستلام *", self.start_date)
+        form.addRow("وقت الاستلام", self.start_time)
         form.addRow("تاريخ التسليم المتوقَّع *", self.end_date)
         form.addRow("خصم", self.discount)
         form.addRow("رسوم إضافية", self.extra)
@@ -105,15 +127,36 @@ class NewContractDialog(QDialog):
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
 
+        # التجديد: نفس العميل ونفس السيارة، ويبدأ من انتهاء العقد السابق
+        if preset:
+            self._apply_preset(preset)
+
         if self.vehicle.count():
             self._on_vehicle_changed()
         else:
-            self.quote_label.setText("⚠ لا توجد سيارات متاحة للتأجير حالياً.")
+            self.quote_label.setText("⚠ لا توجد سيارات قابلة للحجز (كلّها في الصيانة).")
             save.setEnabled(False)
 
         if not self.customer.count():
             self.quote_label.setText("⚠ لا يوجد عملاء مسجَّلون. أضف عميلاً أولاً.")
             save.setEnabled(False)
+
+    def _apply_preset(self, preset):
+        for widget, key in ((self.customer, "customer_id"), (self.vehicle, "vehicle_id")):
+            index = widget.findData(preset.get(key))
+            if index >= 0:
+                widget.setCurrentIndex(index)
+
+        if preset.get("start_date"):
+            start = QDate.fromString(preset["start_date"], "yyyy-MM-dd")
+            self.start_date.setDate(start)
+            self.end_date.setDate(start.addDays(int(preset.get("days") or 7)))
+        if preset.get("start_time"):
+            self.start_time.setTime(
+                QTime.fromString(preset["start_time"], "HH:mm")
+            )
+        if preset.get("notes"):
+            self.notes.setPlainText(preset["notes"])
 
     # ------------------------------------------------------------------
     def _on_vehicle_changed(self):
@@ -169,6 +212,7 @@ class NewContractDialog(QDialog):
                 vehicle_id=self.vehicle.currentData(),
                 start_date=self.start_date.date().toString("yyyy-MM-dd"),
                 expected_end_date=self.end_date.date().toString("yyyy-MM-dd"),
+                start_time=self.start_time.time().toString("HH:mm"),
                 discount=money.to_minor(self.discount.value()),
                 extra_charges=money.to_minor(self.extra.value()),
                 deposit_amount=money.to_minor(self.deposit.value()),
@@ -193,8 +237,8 @@ class CloseContractDialog(QDialog):
         super().__init__(parent)
         self._contract = contract
 
-        self.setWindowTitle("إغلاق العقد %s" % contract["contract_number"])
-        self.setMinimumWidth(500)
+        self.setWindowTitle("إنهاء العقد %s" % contract["contract_number"])
+        self.setMinimumWidth(520)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         layout = QVBoxLayout(self)
@@ -203,6 +247,15 @@ class CloseContractDialog(QDialog):
 
         self.end_date = date_field()
         self.end_date.dateChanged.connect(self._preview)
+
+        self.end_time = time_field(datetime.datetime.now().strftime("%H:%M"))
+        self.end_time.timeChanged.connect(self._preview)
+
+        # الإرجاع المبكّر يُحتسب بالساعة: من أعادها قبل الموعد بخمس ساعات لا
+        # يَعدل أن يُحاسَب بيوم كامل.
+        self.hourly = QCheckBox("احتساب المدّة بالساعة (للإرجاع المبكّر)")
+        self.hourly.stateChanged.connect(self._preview)
+
         self.extra = money_field()
         self.extra.valueChanged.connect(self._preview)
 
@@ -215,6 +268,8 @@ class CloseContractDialog(QDialog):
         self.note = QLineEdit()
 
         form.addRow("تاريخ التسليم الفعلي *", self.end_date)
+        form.addRow("وقت التسليم", self.end_time)
+        form.addRow("", self.hourly)
         form.addRow("رسوم إضافية (تأخير، وقود، أضرار)", self.extra)
         form.addRow("قراءة العدّاد عند التسليم", self.odometer)
         form.addRow("مكان التسليم", self.return_location)
@@ -242,12 +297,15 @@ class CloseContractDialog(QDialog):
     def _preview(self):
         symbol = settings_repo.symbol_of(self._contract["currency_code"])
         raw = contracts_repo.get_raw(self._contract["id"])
+        hourly = self.hourly.isChecked()
 
         try:
             result = pricing.settlement(
                 raw,
                 self.end_date.date().toString("yyyy-MM-dd"),
                 money.to_minor(self.extra.value()),
+                actual_end_time=self.end_time.time().toString("HH:mm"),
+                hourly=hourly,
             )
         except ValueError as error:
             self.preview.setText("⚠ %s" % error)
@@ -257,12 +315,19 @@ class CloseContractDialog(QDialog):
         difference = result["difference"]
         direction = "زيادة" if difference > 0 else ("نقص" if difference < 0 else "بلا تغيير")
 
+        if hourly:
+            duration = "%s (%d ساعة)" % (
+                pricing.describe_duration(result["hours"]), result["hours"]
+            )
+        else:
+            duration = "%d يوم" % result["days"]
+
         self.preview.setText(
-            "المدّة الفعلية: %d يوم (كانت %d)\n"
+            "المدّة الفعلية: %s — وكانت %d يوم\n"
             "القيمة النهائية: %s  (%s عن القيمة السابقة: %s)\n"
-            "المدفوع: %s  |  المتبقّي بعد الإغلاق: %s"
+            "المدفوع: %s  |  المتبقّي بعد الإنهاء: %s"
             % (
-                result["days"], self._contract["days_count"],
+                duration, self._contract["days_count"],
                 money.format_amount(result["total"], symbol),
                 direction, money.format_amount(abs(difference), symbol),
                 money.format_amount(paid, symbol),
@@ -279,6 +344,8 @@ class CloseContractDialog(QDialog):
                 end_odometer=self.odometer.value() or None,
                 return_location=self.return_location.text().strip() or None,
                 note=self.note.text().strip() or None,
+                actual_end_time=self.end_time.time().toString("HH:mm"),
+                hourly=self.hourly.isChecked(),
             )
         except Exception as error:
             show_error(self, error)
@@ -290,6 +357,152 @@ class CloseContractDialog(QDialog):
             "أُغلق العقد وأصبحت السيارة متاحة.\nالمتبقّي على العميل: %s"
             % money.format_amount(result["balance_due"], symbol),
         )
+        self.accept()
+
+
+class EditContractDialog(QDialog):
+    """حوار تعديل عقد مفتوح: التواريخ والسيارة والخصم والرسوم.
+
+    تبديل السيارة مسموح ومقصود: يحدث في المكاتب أن تتعطّل السيارة المتَّفق عليها
+    فتُستبدل بأخرى، والعقد نفسه يبقى.
+    """
+
+    def __init__(self, contract, parent=None):
+        super().__init__(parent)
+        self._contract = contract
+
+        self.setWindowTitle("تعديل العقد %s" % contract["contract_number"])
+        self.setMinimumWidth(560)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.vehicle = combo(
+            [(row["id"], _vehicle_label(row)) for row in vehicles_repo.list_bookable()]
+        )
+        index = self.vehicle.findData(contract["vehicle_id"])
+        if index < 0:
+            # السيارة الحالية قد تكون في الصيانة فلا تظهر في القائمة: تُضاف يدوياً
+            self.vehicle.addItem(
+                "%s — %s" % (contract["vehicle_title"], contract["plate_number"]),
+                contract["vehicle_id"],
+            )
+            index = self.vehicle.count() - 1
+        self.vehicle.setCurrentIndex(index)
+        self.vehicle.currentIndexChanged.connect(self._preview)
+
+        self.start_date = date_field(
+            QDate.fromString(contract["start_date"], "yyyy-MM-dd")
+        )
+        self.start_time = time_field(contract["start_time"] or "12:00")
+        self.end_date = date_field(
+            QDate.fromString(contract["expected_end_date"], "yyyy-MM-dd")
+        )
+        self.start_date.dateChanged.connect(self._preview)
+        self.end_date.dateChanged.connect(self._preview)
+
+        self.discount = money_field()
+        self.discount.setValue(float(money.to_major(contract["discount"])))
+        self.discount.valueChanged.connect(self._preview)
+
+        self.extra = money_field()
+        self.extra.setValue(float(money.to_major(contract["extra_charges"])))
+        self.extra.valueChanged.connect(self._preview)
+
+        self.pickup = QLineEdit(contract["pickup_location"] or "")
+        self.notes = QPlainTextEdit(contract["notes"] or "")
+        self.notes.setMaximumHeight(70)
+
+        form.addRow("السيارة", self.vehicle)
+        form.addRow("تاريخ الاستلام", self.start_date)
+        form.addRow("وقت الاستلام", self.start_time)
+        form.addRow("تاريخ التسليم المتوقَّع", self.end_date)
+        form.addRow("خصم", self.discount)
+        form.addRow("رسوم إضافية", self.extra)
+        form.addRow("مكان الاستلام", self.pickup)
+        form.addRow("ملاحظات", self.notes)
+        layout.addLayout(form)
+
+        self.preview_label = QLabel("")
+        self.preview_label.setWordWrap(True)
+        card = Card(margins=(14, 12, 14, 12))
+        card.body.addWidget(self.preview_label)
+        layout.addWidget(card)
+
+        buttons = QHBoxLayout()
+        save = primary_button("حفظ التعديل")
+        save.clicked.connect(self._save)
+        cancel = QPushButton("إلغاء")
+        cancel.clicked.connect(self.reject)
+        buttons.addStretch(1)
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+        self._preview()
+
+    def _preview(self):
+        vehicle = vehicles_repo.get(self.vehicle.currentData())
+        if vehicle is None:
+            return
+
+        same_vehicle = vehicle["id"] == self._contract["vehicle_id"]
+        daily = (self._contract["daily_rate_snapshot"] if same_vehicle
+                 else vehicle["daily_rate"])
+        weekly = (self._contract["weekly_rate_snapshot"] if same_vehicle
+                  else vehicle["weekly_rate"])
+        symbol = settings_repo.symbol_of(
+            self._contract["currency_code"] if same_vehicle else vehicle["currency_code"]
+        )
+
+        try:
+            estimate = pricing.quote(
+                self.start_date.date().toString("yyyy-MM-dd"),
+                self.end_date.date().toString("yyyy-MM-dd"),
+                daily, weekly,
+                money.to_minor(self.discount.value()),
+                money.to_minor(self.extra.value()),
+            )
+        except ValueError as error:
+            self.preview_label.setText("⚠ %s" % error)
+            return
+
+        paid = int(self._contract["paid_amount"])
+        note = "" if same_vehicle else "\n⚠ تبديل السيارة يعتمد تعرفة السيارة الجديدة."
+
+        self.preview_label.setText(
+            "المدّة الجديدة: %d يوم (كانت %d)\n"
+            "الإجمالي الجديد: %s (كان %s)\nالمدفوع: %s  |  المتبقّي: %s%s"
+            % (
+                estimate["days"], self._contract["days_count"],
+                money.format_amount(estimate["total"], symbol),
+                money.format_amount(self._contract["total_amount"], symbol),
+                money.format_amount(paid, symbol),
+                money.format_amount(estimate["total"] - paid, symbol),
+                note,
+            )
+        )
+
+    def _save(self):
+        try:
+            rental_service.update_contract(
+                self._contract["id"],
+                start_date=self.start_date.date().toString("yyyy-MM-dd"),
+                expected_end_date=self.end_date.date().toString("yyyy-MM-dd"),
+                start_time=self.start_time.time().toString("HH:mm"),
+                vehicle_id=self.vehicle.currentData(),
+                discount=money.to_minor(self.discount.value()),
+                extra_charges=money.to_minor(self.extra.value()),
+                pickup_location=self.pickup.text().strip() or None,
+                notes=self.notes.toPlainText().strip() or None,
+            )
+        except Exception as error:
+            show_error(self, error)
+            return
+
+        show_info(self, "حُفظ التعديل وأُعيد حساب قيمة العقد.")
         self.accept()
 
 
@@ -442,9 +655,16 @@ class ContractsPage(QWidget):
 
         self.payment_button = primary_button("تسجيل دفعة")
         self.payment_button.clicked.connect(self._add_payment)
-        self.close_button = QPushButton("إغلاق العقد")
+        self.close_button = QPushButton("إنهاء العقد")
         self.close_button.clicked.connect(self._close_contract)
+        self.renew_button = QPushButton("تجديد")
+        self.renew_button.setToolTip("إنشاء عقد جديد لنفس العميل والسيارة يبدأ من انتهاء هذا")
+        self.renew_button.clicked.connect(self._renew)
+        self.edit_button = QPushButton("تعديل")
+        self.edit_button.setToolTip("تعديل تواريخ العقد أو سيارته أو خصمه")
+        self.edit_button.clicked.connect(self._edit)
         self.extend_button = QPushButton("تمديد")
+        self.extend_button.setToolTip("تمديد العقد نفسه بتاريخ انتهاء أبعد")
         self.extend_button.clicked.connect(self._extend)
         self.print_button = QPushButton("طباعة PDF")
         self.print_button.clicked.connect(self._print)
@@ -452,9 +672,10 @@ class ContractsPage(QWidget):
         self.cancel_button.setObjectName("danger")
         self.cancel_button.clicked.connect(self._cancel)
 
-        for button in (self.payment_button, self.close_button, self.extend_button):
+        for button in (self.payment_button, self.close_button, self.renew_button):
             row1.addWidget(button)
-        for button in (self.print_button, self.cancel_button):
+        for button in (self.edit_button, self.extend_button, self.print_button,
+                       self.cancel_button):
             row2.addWidget(button)
         row2.addStretch(1)
 
@@ -482,7 +703,12 @@ class ContractsPage(QWidget):
         self.payment_button.setEnabled(bool(contract) and has_balance
                                        and contract["status"] != "cancelled")
         self.close_button.setEnabled(is_open)
+        self.edit_button.setEnabled(is_open)
         self.extend_button.setEnabled(is_open)
+        # التجديد متاح حتى بعد الإنهاء: العميل قد يعود بعد أيام فيُجدَّد له
+        self.renew_button.setEnabled(
+            bool(contract) and contract["status"] != "cancelled"
+        )
         self.print_button.setEnabled(bool(contract))
         self.cancel_button.setEnabled(
             bool(contract) and contract["status"] != "cancelled" and session.has_role("admin")
@@ -530,10 +756,20 @@ class ContractsPage(QWidget):
             if late > 0:
                 overdue = "\n⚠ متأخّر عن موعد التسليم بـ %d يوم" % late
 
+        # العقد المُغلق بالاحتساب الساعي تُعرض مدّته بالساعات لا بالأيام
+        if ("billing_mode" in contract.keys() and contract["billing_mode"] == "hourly"
+                and contract["hours_count"]):
+            duration = "%s — %d ساعة" % (
+                pricing.describe_duration(contract["hours_count"]),
+                contract["hours_count"],
+            )
+        else:
+            duration = "%d يوم" % contract["days_count"]
+
         self.detail_title.setText("العقد %s" % contract["contract_number"])
         self.detail_body.setText(fix_dates(
             "العميل: %s (%s)\nالسيارة: %s — %s\n"
-            "المدّة: %s ← %s (%d يوم)\n"
+            "المدّة: %s ← %s (%s)\n"
             "الإجمالي: %s  |  المدفوع: %s  |  المتبقّي: %s\n"
             "الحالة: %s  |  الدفع: %s\nأنشأه: %s%s"
             % (
@@ -541,7 +777,7 @@ class ContractsPage(QWidget):
                 contract["vehicle_title"], contract["plate_number"],
                 contract["start_date"],
                 contract["actual_end_date"] or contract["expected_end_date"],
-                contract["days_count"],
+                duration,
                 money.format_amount(contract["total_amount"], symbol),
                 money.format_amount(contract["paid_amount"], symbol),
                 money.format_amount(contract["balance_due"], symbol),
@@ -577,6 +813,32 @@ class ContractsPage(QWidget):
         if contract is None:
             return
         if CloseContractDialog(contract, self).exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _edit(self):
+        contract = self._selected()
+        if contract is None:
+            return
+        if EditContractDialog(contract, self).exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _renew(self):
+        """يفتح حوار عقد جديد مهيّأً بنفس العميل والسيارة، يبدأ من انتهاء الحالي."""
+        contract = self._selected()
+        if contract is None:
+            return
+
+        preset = {
+            "customer_id": contract["customer_id"],
+            "vehicle_id": contract["vehicle_id"],
+            "start_date": contract["actual_end_date"] or contract["expected_end_date"],
+            "start_time": contract["start_time"],
+            "days": 7,
+            "notes": "تجديد للعقد %s" % contract["contract_number"],
+        }
+
+        dialog = NewContractDialog(self, preset=preset)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
     def _extend(self):

@@ -120,8 +120,16 @@ class CustomersPage(QWidget):
 
         header = PageHeader("العملاء", "إدارة بيانات المستأجرين ووثائقهم")
 
+        # العملاء الذين يترددون على المكتب كثيراً أهمّ من الترتيب الأبجدي
+        self.frequent_toggle = QCheckBox("الأكثر تعاملاً أولاً")
+        self.frequent_toggle.setToolTip(
+            "ترتيب العملاء بعدد عقودهم بدل الترتيب الأبجدي"
+        )
+        self.frequent_toggle.stateChanged.connect(self.refresh)
+
         self.search = search_box("بحث بالاسم أو الهاتف أو رقم الجواز…")
         self.search.textChanged.connect(self.refresh)
+        header.actions.addWidget(self.frequent_toggle)
         header.actions.addWidget(self.search)
 
         add_button = primary_button("+ عميل جديد")
@@ -140,8 +148,8 @@ class CustomersPage(QWidget):
                 ("full_name", "الاسم"),
                 ("phone", "الهاتف"),
                 ("national_id", "رقم الجواز/الوطني"),
-                ("license_number", "رقم الرخصة"),
-                ("license_expiry", "انتهاء الرخصة"),
+                ("contracts_count", "عدد العقود"),
+                ("last_contract_date", "آخر تعامل"),
             ],
             stretch_column=0,
         )
@@ -227,7 +235,11 @@ class CustomersPage(QWidget):
             return
 
         balance = customers_repo.outstanding_balance(customer["id"])
-        self.detail_title.setText(customer["full_name"])
+        history = customers_repo.contracts_of(customer["id"])
+        self.detail_title.setText(
+            "%s%s" % (customer["full_name"],
+                      "  ★ عميل متكرّر" if len(history) >= 2 else "")
+        )
         self.detail_body.setText(fix_dates(
             "الهاتف: %s\nرقم الجواز/الوطني: %s\nرخصة القيادة: %s (تنتهي %s)\n"
             "الجنسية: %s\nالعنوان: %s\nالمستحقّ عليه: %s%s\nملاحظات: %s"
@@ -300,6 +312,17 @@ class CustomersPage(QWidget):
     def refresh(self):
         try:
             self._symbol = settings_repo.base_currency()["symbol"]
-            self.table.fill(customers_repo.search(self.search.text()))
+            rows = customers_repo.search(
+                self.search.text(),
+                order_by="frequent" if self.frequent_toggle.isChecked() else "name",
+            )
+            self.table.fill(rows, self._format_customer)
         except Exception as error:
             show_error(self, error)
+
+    def _format_customer(self, row, key):
+        if key == "last_contract_date":
+            return row["last_contract_date"] or "—"
+        if key == "contracts_count":
+            return row["contracts_count"] or 0
+        return row[key] if key in row.keys() else ""

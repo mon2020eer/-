@@ -77,6 +77,107 @@ def test_settlement_detects_late_return():
     assert result["difference"] == DAILY  # يوم تأخير واحد
 
 
+# ---------------------------------------------------------------------------
+# الاحتساب بالساعة
+# ---------------------------------------------------------------------------
+HOURLY = 1000
+
+
+def _at(day, hour):
+    import datetime
+
+    return datetime.datetime(2026, 3, day, hour, 0)
+
+
+def test_default_hourly_rate_rounds_up():
+    """التقريب لأعلى مقصود: لولاه لصارت 24 ساعة أرخص من يوم كامل."""
+    assert pricing.default_hourly_rate(10000) == 417      # ceil(10000/24)
+    assert pricing.default_hourly_rate(417 * 24) >= 417
+    assert pricing.default_hourly_rate(0) == 0
+
+
+def test_minimum_one_hour():
+    """من استلم السيارة وأعادها بعد نصف ساعة يدفع ساعة."""
+    assert pricing.rental_hours(_at(1, 10), _at(1, 10)) == 1
+
+
+def test_partial_hour_counts_as_full_hour():
+    import datetime
+
+    start = _at(1, 10)
+    assert pricing.rental_hours(start, start + datetime.timedelta(minutes=70)) == 2
+
+
+def test_hours_reject_reversed_times():
+    with pytest.raises(ValueError):
+        pricing.rental_hours(_at(2, 10), _at(1, 10))
+
+
+def test_five_hours_are_billed_hourly():
+    assert pricing.base_amount_hours(5, DAILY, 0, HOURLY) == 5 * HOURLY
+
+
+def test_hourly_total_is_capped_at_the_daily_rate():
+    """سقف الإنصاف: 15 ساعة × 1000 = 15000، لكنّها لا تتجاوز سعر اليوم 10000."""
+    assert pricing.base_amount_hours(15, DAILY, 0, HOURLY) == DAILY
+
+
+def test_exact_day_uses_the_daily_rate():
+    assert pricing.base_amount_hours(24, DAILY, 0, HOURLY) == DAILY
+
+
+def test_day_plus_hours():
+    """27 ساعة = يوم كامل + 3 ساعات."""
+    assert pricing.base_amount_hours(27, DAILY, 0, HOURLY) == DAILY + 3 * HOURLY
+
+
+def test_hourly_respects_the_weekly_rate_for_full_days():
+    """الأيام الكاملة تمرّ على قاعدة الأسبوع، والساعات تُضاف بعدها."""
+    hours = 7 * 24 + 2
+    assert pricing.base_amount_hours(hours, DAILY, WEEKLY, HOURLY) == WEEKLY + 2 * HOURLY
+
+
+def test_quote_hours_reports_the_breakdown():
+    result = pricing.quote_hours(_at(1, 8), _at(2, 13), DAILY, 0, HOURLY)
+    assert result["hours"] == 29
+    assert result["full_days"] == 1
+    assert result["remainder_hours"] == 5
+    assert result["total"] == DAILY + 5 * HOURLY
+
+
+def test_settlement_hourly_on_early_return():
+    """التسوية بالساعة عند الإرجاع المبكّر تنقص القيمة عن العقد الأصلي."""
+    contract = {
+        "start_date": "2026-03-01",
+        "start_time": "10:00",
+        "daily_rate_snapshot": DAILY,
+        "weekly_rate_snapshot": 0,
+        "hourly_rate_snapshot": HOURLY,
+        "discount": 0,
+        "extra_charges": 0,
+        "total_amount": 3 * DAILY,
+    }
+    result = pricing.settlement(contract, "2026-03-02", actual_end_time="14:00", hourly=True)
+
+    assert result["mode"] == "hourly"
+    assert result["hours"] == 28
+    assert result["total"] == DAILY + 4 * HOURLY
+    assert result["difference"] < 0                 # أقلّ من قيمة العقد الأصلية
+
+
+def test_describe_duration_uses_correct_arabic_plurals():
+    """العربية تميّز المفرد والمثنّى وجمعَي القلّة والكثرة، و«6 ساعة» ركيك."""
+    assert pricing.describe_duration(1) == "ساعة واحدة"
+    assert pricing.describe_duration(2) == "ساعتان"
+    assert pricing.describe_duration(5) == "5 ساعات"
+    assert pricing.describe_duration(11) == "11 ساعة"
+    assert pricing.describe_duration(24) == "يوم واحد"
+    assert pricing.describe_duration(30) == "يوم واحد و6 ساعات"
+    assert pricing.describe_duration(48) == "يومان"
+    assert pricing.describe_duration(72) == "3 أيام"
+    assert pricing.describe_duration(26 * 24) == "26 يوماً"
+
+
 def test_settlement_detects_early_return():
     contract = {
         "start_date": "2026-03-01",

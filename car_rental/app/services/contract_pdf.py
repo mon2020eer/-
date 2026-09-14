@@ -17,6 +17,7 @@ from PyQt6.QtPrintSupport import QPrinter
 from .. import config
 from ..core import audit, money
 from ..repositories import contracts_repo, payments_repo, settings_repo
+from . import pricing
 
 _STATUS_AR = config.CONTRACT_STATUS_LABELS
 _PAYMENT_AR = config.PAYMENT_STATUS_LABELS
@@ -46,6 +47,12 @@ def _amount(minor, symbol):
     return _esc(money.format_amount(minor, symbol))
 
 
+def _field(row, key, default=None):
+    """قراءة عمود قد يغيب في قاعدة بيانات لم تُرقَّ بعد."""
+    value = row[key] if key in row.keys() else None
+    return default if value is None else value
+
+
 def build_html(contract_id, conn=None):
     """يبني نصّ العقد بصيغة HTML جاهزاً للطباعة أو المعاينة."""
     contract = contracts_repo.get(contract_id, conn=conn)
@@ -70,8 +77,30 @@ def build_html(contract_id, conn=None):
         for row in payments
     ) or """<tr><td colspan="4" class="muted">لا توجد دفعات مسجَّلة على هذا العقد.</td></tr>"""
 
+    # المدّة تُوصف بالساعات إن أُغلق العقد بالاحتساب الساعي
+    hourly = _field(contract, "billing_mode") == "hourly"
+    if hourly:
+        duration = "%s (%s ساعة)" % (
+            pricing.describe_duration(_field(contract, "hours_count", 0)),
+            _field(contract, "hours_count", 0),
+        )
+        rate_label = "سعر الساعة"
+        rate_value = _amount(_field(contract, "hourly_rate_snapshot", 0), symbol)
+    else:
+        duration = "%s يوم" % contract["days_count"]
+        rate_label = "السعر اليومي"
+        rate_value = _amount(contract["daily_rate_snapshot"], symbol)
+
+    start_time = _field(contract, "start_time", "")
+    end_time = _field(contract, "actual_end_time", "")
+
     return _TEMPLATE.format(
         office_name=_esc(office_name),
+        duration=_esc(duration),
+        rate_label=_esc(rate_label),
+        rate_value=rate_value,
+        start_time=_date(start_time) if start_time else "—",
+        end_time=_date(end_time) if end_time else "—",
         office_line=_esc(" — ".join(part for part in (office_address, office_phone) if part)),
         number=_esc(contract["contract_number"]),
         printed_at=_LRM + datetime.datetime.now().strftime("%Y-%m-%d %H:%M") + _LRM,
@@ -84,8 +113,7 @@ def build_html(contract_id, conn=None):
         start_date=_date(contract["start_date"]),
         end_date=_date(contract["actual_end_date"] or contract["expected_end_date"]),
         end_label="تاريخ التسليم الفعلي" if contract["actual_end_date"] else "تاريخ التسليم المتوقَّع",
-        days=_esc(contract["days_count"]),
-        daily_rate=_amount(contract["daily_rate_snapshot"], symbol),
+
         subtotal=_amount(contract["subtotal"], symbol),
         discount=_amount(contract["discount"], symbol),
         extra=_amount(contract["extra_charges"], symbol),
@@ -181,8 +209,10 @@ _TEMPLATE = """<!DOCTYPE html>
   <table class="totals">
     <tr><th>تاريخ الاستلام</th><td>{start_date}</td>
         <th>{end_label}</th><td>{end_date}</td></tr>
-    <tr><th>عدد الأيام</th><td>{days}</td>
-        <th>السعر اليومي</th><td>{daily_rate}</td></tr>
+    <tr><th>وقت الاستلام</th><td>{start_time}</td>
+        <th>وقت التسليم</th><td>{end_time}</td></tr>
+    <tr><th>المدّة المحتسَبة</th><td>{duration}</td>
+        <th>{rate_label}</th><td>{rate_value}</td></tr>
     <tr><th>قيمة الإيجار</th><td>{subtotal}</td>
         <th>الخصم</th><td>{discount}</td></tr>
     <tr><th>رسوم إضافية</th><td>{extra}</td>

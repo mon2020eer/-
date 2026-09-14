@@ -26,25 +26,66 @@ def get(customer_id, conn=None):
     return db.query_one("SELECT * FROM customers WHERE id = ?", (customer_id,), conn=conn)
 
 
-def search(term=None, limit=500, conn=None):
-    """بحث سريع بالاسم أو الهاتف أو الرقم الوطني.
+def search(term=None, limit=500, order_by="name", conn=None):
+    """بحث سريع بالاسم أو الهاتف أو الرقم الوطني أو رقم الرخصة.
 
     يُستخدم ``LIKE`` بأنماط على الطرفين: عدد العملاء في مكتب واحد لا يبلغ
     الحجم الذي يستدعي فهرسة نصية كاملة (FTS)، وبساطة الاستعلام أَولى.
+
+    يُرفق مع كل عميل عدد عقوده وتاريخ آخر تعامل، لأن الموظّف يحتاج أن يعرف
+    من هو العميل المتكرّر قبل أن يفتح ملفّه.
+
+    ``order_by="frequent"`` يرتّب بالأكثر تعاملاً ثم بالأحدث — وهو الترتيب
+    الذي يضع العملاء الذين يترددون على المكتب في أعلى القائمة.
     """
     term = (term or "").strip()
-    if not term:
-        return db.query(
-            "SELECT * FROM customers ORDER BY full_name LIMIT ?", (limit,), conn=conn
-        )
+    clauses, params = [], []
 
-    pattern = "%" + term + "%"
+    if term:
+        pattern = "%" + term + "%"
+        clauses.append(
+            "(c.full_name LIKE ? OR c.phone LIKE ? OR c.national_id LIKE ?"
+            " OR c.license_number LIKE ?)"
+        )
+        params.extend([pattern] * 4)
+
+    order = (
+        "contracts_count DESC, last_contract_date DESC, c.full_name"
+        if order_by == "frequent"
+        else "c.full_name"
+    )
+
+    sql = """
+        SELECT c.*,
+               COUNT(ct.id)                                   AS contracts_count,
+               MAX(ct.start_date)                             AS last_contract_date,
+               COALESCE(SUM(CASE WHEN ct.status != 'cancelled'
+                                 THEN ct.total_amount * ct.rate_to_base / 1000000
+                                 ELSE 0 END), 0)              AS total_spent
+          FROM customers c
+     LEFT JOIN contracts ct ON ct.customer_id = c.id AND ct.status != 'cancelled'
+    """
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " GROUP BY c.id ORDER BY %s LIMIT ?" % order
+    params.append(limit)
+
+    return db.query(sql, params, conn=conn)
+
+
+def frequent(limit=20, min_contracts=2, conn=None):
+    """العملاء المتكرّرون: من له عقدان فأكثر، مرتَّبين بالأكثر تعاملاً."""
     return db.query(
-        """SELECT * FROM customers
-            WHERE full_name LIKE ? OR phone LIKE ? OR national_id LIKE ?
-                  OR license_number LIKE ?
-            ORDER BY full_name LIMIT ?""",
-        (pattern, pattern, pattern, pattern, limit),
+        """SELECT c.*,
+                  COUNT(ct.id)       AS contracts_count,
+                  MAX(ct.start_date) AS last_contract_date
+             FROM customers c
+             JOIN contracts ct ON ct.customer_id = c.id AND ct.status != 'cancelled'
+            GROUP BY c.id
+           HAVING contracts_count >= ?
+            ORDER BY contracts_count DESC, last_contract_date DESC
+            LIMIT ?""",
+        (int(min_contracts), int(limit)),
         conn=conn,
     )
 
