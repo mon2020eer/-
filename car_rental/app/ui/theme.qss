@@ -1,0 +1,310 @@
+/* =========================================================================
+   نمط واجهة منظومة إدارة مكتب إيجار السيارات
+
+   لوحة الألوان: أزرق داكن هادئ للشريط الجانبي، وخلفية رمادية فاتحة جداً
+   للمحتوى، وبطاقات بيضاء. الهدف وضوح القراءة لساعات طويلة أمام الشاشة،
+   لا إبهار بصري. الألوان الدلالية: أخضر = متاح، برتقالي = مؤجَّر،
+   أحمر = مستحق/تحذير.
+   ========================================================================= */
+
+QWidget {
+    color: #1f2937;
+    font-size: 14px;
+}
+
+QMainWindow, QDialog, #contentArea {
+    background: #f4f6f9;
+}
+
+/* ------------------------- الشريط الجانبي ------------------------- */
+#sidebar {
+    background: #16243c;
+    border: none;
+}
+
+#sidebarTitle {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 18px 14px 6px 14px;
+}
+
+#sidebarSubtitle {
+    color: #93a4c0;
+    font-size: 12px;
+    padding: 0 14px 14px 14px;
+}
+
+#navButton {
+    background: transparent;
+    color: #d5dcea;
+    border: none;
+    border-radius: 8px;
+    padding: 11px 14px;
+    margin: 2px 8px;
+    text-align: right;
+    font-size: 14px;
+}
+
+#navButton:hover {
+    background: #22334f;
+    color: #ffffff;
+}
+
+#navButton:checked {
+    background: #2f6fed;
+    color: #ffffff;
+    font-weight: bold;
+}
+
+#userBox {
+    color: #93a4c0;
+    font-size: 12px;
+    padding: 10px 14px;
+    border-top: 1px solid #263650;
+}
+
+/* ------------------------- الترويسة والعناوين ------------------------- */
+#pageTitle {
+    font-size: 20px;
+    font-weight: bold;
+    color: #16243c;
+}
+
+#pageSubtitle {
+    font-size: 13px;
+    color: #6b7280;
+}
+
+#sectionTitle {
+    font-size: 15px;
+    font-weight: bold;
+    color: #16243c;
+    padding: 2px 0;
+}
+
+/* ------------------------- البطاقات ------------------------- */
+#card, QGroupBox {
+    background: #ffffff;
+    border: 1px solid #e3e8ef;
+    border-radius: 12px;
+}
+
+QGroupBox {
+    margin-top: 14px;
+    padding: 16px 12px 12px 12px;
+    font-weight: bold;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top right;
+    right: 14px;
+    padding: 0 6px;
+    color: #16243c;
+}
+
+#statCardValue {
+    font-size: 26px;
+    font-weight: bold;
+    color: #16243c;
+}
+
+#statCardLabel {
+    font-size: 13px;
+    color: #6b7280;
+}
+
+#statCardHint {
+    font-size: 12px;
+    color: #9aa4b2;
+}
+
+/* ------------------------- الأزرار ------------------------- */
+QPushButton {
+    background: #ffffff;
+    border: 1px solid #cfd8e3;
+    border-radius: 8px;
+    padding: 8px 16px;
+    min-height: 20px;
+}
+
+QPushButton:hover   { background: #eef2f8; }
+QPushButton:pressed { background: #e2e8f0; }
+QPushButton:disabled { color: #9aa4b2; background: #f1f3f6; }
+
+QPushButton#primary {
+    background: #2f6fed;
+    color: #ffffff;
+    border: 1px solid #2f6fed;
+    font-weight: bold;
+}
+QPushButton#primary:hover   { background: #2660d8; }
+QPushButton#primary:pressed { background: #1f52bb; }
+
+QPushButton#danger {
+    background: #dc2626;
+    color: #ffffff;
+    border: 1px solid #dc2626;
+}
+QPushButton#danger:hover { background: #b91c1c; }
+
+QPushButton#success {
+    background: #16a34a;
+    color: #ffffff;
+    border: 1px solid #16a34a;
+}
+QPushButton#success:hover { background: #128040; }
+
+/* ------------------------- حقول الإدخال ------------------------- */
+QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
+    background: #ffffff;
+    border: 1px solid #cfd8e3;
+    border-radius: 8px;
+    padding: 7px 10px;
+    selection-background-color: #2f6fed;
+    selection-color: #ffffff;
+}
+
+QLineEdit:focus, QComboBox:focus, QDateEdit:focus,
+QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {
+    border: 1px solid #2f6fed;
+}
+
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+    background: #f1f3f6;
+    color: #6b7280;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+}
+
+QLabel#fieldError {
+    color: #dc2626;
+    font-size: 12px;
+}
+
+QLabel#hint {
+    color: #6b7280;
+    font-size: 12px;
+}
+
+/* ------------------------- الجداول ------------------------- */
+QTableView {
+    background: #ffffff;
+    alternate-background-color: #f8fafc;
+    border: 1px solid #e3e8ef;
+    border-radius: 10px;
+    gridline-color: #eef1f5;
+    selection-background-color: #dbe7ff;
+    selection-color: #16243c;
+}
+
+QHeaderView::section {
+    background: #f1f5fb;
+    color: #44526b;
+    border: none;
+    border-bottom: 1px solid #e3e8ef;
+    padding: 9px 8px;
+    font-weight: bold;
+}
+
+QTableView::item { padding: 6px 8px; }
+
+/* ------------------------- شارات الحالة ------------------------- */
+QLabel#badgeAvailable {
+    background: #dcfce7; color: #166534;
+    border-radius: 10px; padding: 3px 10px; font-size: 12px;
+}
+QLabel#badgeRented {
+    background: #ffedd5; color: #9a3412;
+    border-radius: 10px; padding: 3px 10px; font-size: 12px;
+}
+QLabel#badgeMaintenance {
+    background: #e0e7ff; color: #3730a3;
+    border-radius: 10px; padding: 3px 10px; font-size: 12px;
+}
+QLabel#badgeDue {
+    background: #fee2e2; color: #991b1b;
+    border-radius: 10px; padding: 3px 10px; font-size: 12px;
+}
+
+/* ------------------------- شاشة الدخول ------------------------- */
+#loginPanel {
+    background: #ffffff;
+    border: 1px solid #e3e8ef;
+    border-radius: 16px;
+}
+
+#loginBrand {
+    background: #16243c;
+    border-radius: 16px;
+}
+
+#loginBrandTitle {
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: bold;
+}
+
+#loginBrandText {
+    color: #9fb0cb;
+    font-size: 13px;
+}
+
+#loginTitle {
+    font-size: 19px;
+    font-weight: bold;
+    color: #16243c;
+}
+
+#loginError {
+    color: #dc2626;
+    font-size: 13px;
+}
+
+/* ------------------------- متفرّقات ------------------------- */
+QTabWidget::pane {
+    border: 1px solid #e3e8ef;
+    border-radius: 10px;
+    background: #ffffff;
+}
+
+QTabBar::tab {
+    background: transparent;
+    padding: 9px 18px;
+    margin-left: 2px;
+    border-radius: 8px;
+    color: #44526b;
+}
+
+QTabBar::tab:selected {
+    background: #2f6fed;
+    color: #ffffff;
+    font-weight: bold;
+}
+
+QScrollBar:vertical {
+    background: transparent; width: 11px; margin: 2px;
+}
+QScrollBar::handle:vertical {
+    background: #c8d2e0; border-radius: 5px; min-height: 30px;
+}
+QScrollBar::handle:vertical:hover { background: #aab7ca; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+
+QStatusBar {
+    background: #ffffff;
+    border-top: 1px solid #e3e8ef;
+    color: #6b7280;
+}
+
+QProgressBar {
+    border: 1px solid #cfd8e3;
+    border-radius: 8px;
+    text-align: center;
+    background: #ffffff;
+}
+QProgressBar::chunk { background: #2f6fed; border-radius: 7px; }

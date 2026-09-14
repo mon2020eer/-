@@ -1,0 +1,102 @@
+name: منظومة إيجار السيارات — اختبار وبناء
+
+# يعمل فقط عند تغيّر ملفات مشروع إيجار السيارات، فلا يتداخل مع مشروع
+# مراقب المناقصات في المستودع نفسه.
+on:
+  push:
+    paths:
+      - "car_rental/**"
+      - ".github/workflows/car-rental.yml"
+  pull_request:
+    paths:
+      - "car_rental/**"
+  workflow_dispatch:          # تشغيل يدوي بضغطة زر لإنتاج ملف .exe عند الطلب
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) الاختبارات على لينكس: أسرع وأرخص، وتكفي للتحقّق من المنطق والواجهة
+  # ---------------------------------------------------------------------------
+  tests:
+    name: الاختبارات
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: car_rental
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: car_rental/requirements.txt
+
+      # مكتبات النظام التي تحتاجها Qt للعمل بلا شاشة (offscreen)
+      - name: تثبيت مكتبات Qt للنظام
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
+            libxcb-render-util0 libxcb-xinerama0
+
+      - name: تثبيت المكتبات
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: تشغيل الاختبارات
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest tests -q
+
+  # ---------------------------------------------------------------------------
+  # 2) بناء ملف ويندوز التنفيذي ورفعه كأداة قابلة للتنزيل
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: بناء ملف ويندوز التنفيذي
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: car_rental
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: car_rental/requirements.txt
+
+      - name: تثبيت المكتبات
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.10.0 pytest
+
+      - name: بناء التطبيق
+        run: pyinstaller build/car_rental.spec --noconfirm --distpath build/dist --workpath build/work
+
+      # فحص دخان: يشغّل التطبيق فعلياً على ويندوز ويتأكّد أنّه يُقلع ويخرج بسلام
+      - name: فحص إقلاع التطبيق
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./build/dist/CarRentalOffice/CarRentalOffice.exe --version
+          ./build/dist/CarRentalOffice/CarRentalOffice.exe --self-test
+
+      - name: رفع المخرجات
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarRentalOffice-win64
+          path: car_rental/build/dist/CarRentalOffice
+          retention-days: 30

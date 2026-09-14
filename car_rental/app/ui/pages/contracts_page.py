@@ -1,0 +1,669 @@
+# -*- coding: utf-8 -*-
+"""صفحة العقود: الإنشاء والإغلاق والتمديد والدفعات وطباعة العقد.
+
+حوار إنشاء العقد يعرض **تسعيرة لحظية** تتحدّث مع كل تغيير في التواريخ أو
+الخصم، فيرى الموظّف القيمة النهائية قبل أن يضغط «حفظ»، ولا يُفاجأ العميل.
+"""
+
+import datetime
+
+from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtWidgets import (
+    QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
+    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+)
+
+from ... import config
+from ...core import money, session
+from ...repositories import (
+    contracts_repo, customers_repo, payments_repo, settings_repo, vehicles_repo,
+)
+from ...services import contract_pdf, pricing, rental_service
+from ..widgets.common import (
+    Card, DataTable, PageHeader, combo, confirm, date_field, fix_dates,
+    money_field, primary_button, search_box, show_error, show_info,
+)
+
+
+class NewContractDialog(QDialog):
+    """حوار فتح عقد إيجار جديد مع تسعيرة لحظية."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("عقد إيجار جديد")
+        self.setMinimumWidth(560)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        self._vehicle = None
+        self.created_id = None
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.customer = combo(
+            [(row["id"], "%s — %s" % (row["full_name"], row["phone"]))
+             for row in customers_repo.search(limit=2000)
+             if not row["is_blacklisted"]]
+        )
+
+        self.vehicle = combo(
+            [(row["id"], "%s %s — %s" % (row["brand"], row["model"], row["plate_number"]))
+             for row in vehicles_repo.list_available()]
+        )
+        self.vehicle.currentIndexChanged.connect(self._on_vehicle_changed)
+
+        self.start_date = date_field()
+        self.end_date = date_field(QDate.currentDate().addDays(1))
+        self.start_date.dateChanged.connect(self._recalculate)
+        self.end_date.dateChanged.connect(self._recalculate)
+
+        self.discount = money_field()
+        self.discount.valueChanged.connect(self._recalculate)
+        self.extra = money_field()
+        self.extra.valueChanged.connect(self._recalculate)
+
+        self.deposit = money_field()
+        self.deposit_method = combo(list(config.PAYMENT_METHOD_LABELS.items()))
+
+        self.odometer = QSpinBox()
+        self.odometer.setRange(0, 5_000_000)
+        self.odometer.setSuffix(" كم")
+
+        self.pickup = QLineEdit()
+        self.notes = QPlainTextEdit()
+        self.notes.setMaximumHeight(70)
+
+        form.addRow("العميل *", self.customer)
+        form.addRow("السيارة *", self.vehicle)
+        form.addRow("تاريخ الاستلام *", self.start_date)
+        form.addRow("تاريخ التسليم المتوقَّع *", self.end_date)
+        form.addRow("خصم", self.discount)
+        form.addRow("رسوم إضافية", self.extra)
+        form.addRow("عربون مدفوع الآن", self.deposit)
+        form.addRow("طريقة دفع العربون", self.deposit_method)
+        form.addRow("قراءة العدّاد عند الاستلام", self.odometer)
+        form.addRow("مكان الاستلام", self.pickup)
+        form.addRow("ملاحظات", self.notes)
+
+        layout.addLayout(form)
+
+        # --- التسعيرة اللحظية ---
+        self.quote_card = Card(margins=(14, 12, 14, 12), spacing=4)
+        self.quote_label = QLabel("اختر سيارة وتواريخ لعرض التسعيرة.")
+        self.quote_label.setWordWrap(True)
+        self.quote_card.body.addWidget(self.quote_label)
+        layout.addWidget(self.quote_card)
+
+        buttons = QHBoxLayout()
+        save = primary_button("حفظ العقد")
+        save.clicked.connect(self._save)
+        cancel = QPushButton("إلغاء")
+        cancel.clicked.connect(self.reject)
+        buttons.addStretch(1)
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+        if self.vehicle.count():
+            self._on_vehicle_changed()
+        else:
+            self.quote_label.setText("⚠ لا توجد سيارات متاحة للتأجير حالياً.")
+            save.setEnabled(False)
+
+        if not self.customer.count():
+            self.quote_label.setText("⚠ لا يوجد عملاء مسجَّلون. أضف عميلاً أولاً.")
+            save.setEnabled(False)
+
+    # ------------------------------------------------------------------
+    def _on_vehicle_changed(self):
+        vehicle_id = self.vehicle.currentData()
+        self._vehicle = vehicles_repo.get(vehicle_id) if vehicle_id else None
+        if self._vehicle:
+            self.odometer.setValue(int(self._vehicle["odometer"] or 0))
+        self._recalculate()
+
+    def _recalculate(self):
+        if self._vehicle is None:
+            return
+
+        symbol = settings_repo.symbol_of(self._vehicle["currency_code"])
+        try:
+            estimate = pricing.quote(
+                self.start_date.date().toString("yyyy-MM-dd"),
+                self.end_date.date().toString("yyyy-MM-dd"),
+                self._vehicle["daily_rate"],
+                self._vehicle["weekly_rate"],
+                money.to_minor(self.discount.value()),
+                money.to_minor(self.extra.value()),
+            )
+        except ValueError as error:
+            self.quote_label.setText("⚠ %s" % error)
+            return
+
+        self.deposit.setMaximum(float(money.to_major(estimate["total"])))
+        self.quote_label.setText(
+            "المدّة: %d يوم  |  السعر اليومي: %s  |  السعر الأسبوعي: %s\n"
+            "قيمة الإيجار: %s   −  الخصم: %s   +  رسوم: %s\n"
+            "الإجمالي المستحق: %s"
+            % (
+                estimate["days"],
+                money.format_amount(self._vehicle["daily_rate"], symbol),
+                money.format_amount(self._vehicle["weekly_rate"], symbol)
+                if self._vehicle["weekly_rate"] else "—",
+                money.format_amount(estimate["subtotal"], symbol),
+                money.format_amount(estimate["discount"], symbol),
+                money.format_amount(estimate["extra_charges"], symbol),
+                money.format_amount(estimate["total"], symbol),
+            )
+        )
+
+    def _save(self):
+        if self.customer.currentData() is None or self.vehicle.currentData() is None:
+            show_error(self, "اختر العميل والسيارة.")
+            return
+
+        try:
+            contract_id, number = rental_service.open_contract(
+                customer_id=self.customer.currentData(),
+                vehicle_id=self.vehicle.currentData(),
+                start_date=self.start_date.date().toString("yyyy-MM-dd"),
+                expected_end_date=self.end_date.date().toString("yyyy-MM-dd"),
+                discount=money.to_minor(self.discount.value()),
+                extra_charges=money.to_minor(self.extra.value()),
+                deposit_amount=money.to_minor(self.deposit.value()),
+                deposit_method=self.deposit_method.currentData(),
+                pickup_location=self.pickup.text().strip() or None,
+                notes=self.notes.toPlainText().strip() or None,
+                start_odometer=self.odometer.value(),
+            )
+        except Exception as error:
+            show_error(self, error)
+            return
+
+        self.created_id = contract_id
+        show_info(self, "تم إنشاء العقد برقم %s." % number)
+        self.accept()
+
+
+class CloseContractDialog(QDialog):
+    """حوار إغلاق عقد وإعادة حساب القيمة بالمدّة الفعلية."""
+
+    def __init__(self, contract, parent=None):
+        super().__init__(parent)
+        self._contract = contract
+
+        self.setWindowTitle("إغلاق العقد %s" % contract["contract_number"])
+        self.setMinimumWidth(500)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.end_date = date_field()
+        self.end_date.dateChanged.connect(self._preview)
+        self.extra = money_field()
+        self.extra.valueChanged.connect(self._preview)
+
+        self.odometer = QSpinBox()
+        self.odometer.setRange(0, 5_000_000)
+        self.odometer.setSuffix(" كم")
+        self.odometer.setValue(int(contract["start_odometer"] or 0))
+
+        self.return_location = QLineEdit()
+        self.note = QLineEdit()
+
+        form.addRow("تاريخ التسليم الفعلي *", self.end_date)
+        form.addRow("رسوم إضافية (تأخير، وقود، أضرار)", self.extra)
+        form.addRow("قراءة العدّاد عند التسليم", self.odometer)
+        form.addRow("مكان التسليم", self.return_location)
+        form.addRow("ملاحظة", self.note)
+        layout.addLayout(form)
+
+        self.preview = QLabel("")
+        self.preview.setWordWrap(True)
+        card = Card(margins=(14, 12, 14, 12))
+        card.body.addWidget(self.preview)
+        layout.addWidget(card)
+
+        buttons = QHBoxLayout()
+        save = primary_button("إغلاق العقد")
+        save.clicked.connect(self._save)
+        cancel = QPushButton("إلغاء")
+        cancel.clicked.connect(self.reject)
+        buttons.addStretch(1)
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+        self._preview()
+
+    def _preview(self):
+        symbol = settings_repo.symbol_of(self._contract["currency_code"])
+        raw = contracts_repo.get_raw(self._contract["id"])
+
+        try:
+            result = pricing.settlement(
+                raw,
+                self.end_date.date().toString("yyyy-MM-dd"),
+                money.to_minor(self.extra.value()),
+            )
+        except ValueError as error:
+            self.preview.setText("⚠ %s" % error)
+            return
+
+        paid = int(self._contract["paid_amount"])
+        difference = result["difference"]
+        direction = "زيادة" if difference > 0 else ("نقص" if difference < 0 else "بلا تغيير")
+
+        self.preview.setText(
+            "المدّة الفعلية: %d يوم (كانت %d)\n"
+            "القيمة النهائية: %s  (%s عن القيمة السابقة: %s)\n"
+            "المدفوع: %s  |  المتبقّي بعد الإغلاق: %s"
+            % (
+                result["days"], self._contract["days_count"],
+                money.format_amount(result["total"], symbol),
+                direction, money.format_amount(abs(difference), symbol),
+                money.format_amount(paid, symbol),
+                money.format_amount(result["total"] - paid, symbol),
+            )
+        )
+
+    def _save(self):
+        try:
+            result = rental_service.close_contract(
+                self._contract["id"],
+                actual_end_date=self.end_date.date().toString("yyyy-MM-dd"),
+                extra_charges=money.to_minor(self.extra.value()),
+                end_odometer=self.odometer.value() or None,
+                return_location=self.return_location.text().strip() or None,
+                note=self.note.text().strip() or None,
+            )
+        except Exception as error:
+            show_error(self, error)
+            return
+
+        symbol = settings_repo.symbol_of(self._contract["currency_code"])
+        show_info(
+            self,
+            "أُغلق العقد وأصبحت السيارة متاحة.\nالمتبقّي على العميل: %s"
+            % money.format_amount(result["balance_due"], symbol),
+        )
+        self.accept()
+
+
+class PaymentDialog(QDialog):
+    """حوار تسجيل دفعة على عقد."""
+
+    def __init__(self, contract, parent=None):
+        super().__init__(parent)
+        self._contract = contract
+
+        self.setWindowTitle("تسجيل دفعة — %s" % contract["contract_number"])
+        self.setMinimumWidth(440)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        symbol = settings_repo.symbol_of(contract["currency_code"])
+        remaining = int(contract["balance_due"])
+
+        layout = QVBoxLayout(self)
+        info = QLabel(
+            "إجمالي العقد: %s\nالمدفوع: %s\nالمتبقّي: %s"
+            % (
+                money.format_amount(contract["total_amount"], symbol),
+                money.format_amount(contract["paid_amount"], symbol),
+                money.format_amount(remaining, symbol),
+            )
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.amount = money_field()
+        self.amount.setMaximum(float(money.to_major(max(remaining, 0))))
+        self.amount.setValue(float(money.to_major(max(remaining, 0))))
+
+        self.method = combo(list(config.PAYMENT_METHOD_LABELS.items()))
+        self.reference = QLineEdit()
+        self.note = QLineEdit()
+
+        form.addRow("المبلغ *", self.amount)
+        form.addRow("طريقة الدفع", self.method)
+        form.addRow("رقم المرجع / الإيصال", self.reference)
+        form.addRow("ملاحظة", self.note)
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        save = primary_button("تسجيل الدفعة")
+        save.clicked.connect(self._save)
+        cancel = QPushButton("إلغاء")
+        cancel.clicked.connect(self.reject)
+        buttons.addStretch(1)
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+        if remaining <= 0:
+            info.setText(info.text() + "\n\nالعقد مدفوع بالكامل.")
+            save.setEnabled(False)
+
+    def _save(self):
+        try:
+            payments_repo.add(
+                self._contract["id"],
+                money.to_minor(self.amount.value()),
+                method=self.method.currentData(),
+                reference=self.reference.text().strip() or None,
+                note=self.note.text().strip() or None,
+            )
+        except Exception as error:
+            show_error(self, error)
+            return
+        self.accept()
+
+
+class ContractsPage(QWidget):
+    """قائمة العقود مع كل إجراءاتها."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(14)
+
+        header = PageHeader("عقود الإيجار", "إنشاء العقود وإغلاقها وتحصيل المدفوعات")
+
+        self.status_filter = combo(
+            [("", "كل الحالات")] + list(config.CONTRACT_STATUS_LABELS.items())
+        )
+        self.status_filter.currentIndexChanged.connect(self.refresh)
+
+        self.payment_filter = combo(
+            [("", "كل حالات الدفع")] + list(config.PAYMENT_STATUS_LABELS.items())
+        )
+        self.payment_filter.currentIndexChanged.connect(self.refresh)
+
+        self.search = search_box("بحث برقم العقد أو اسم العميل أو اللوحة…")
+        self.search.textChanged.connect(self.refresh)
+
+        header.actions.addWidget(self.status_filter)
+        header.actions.addWidget(self.payment_filter)
+        header.actions.addWidget(self.search)
+
+        new_button = primary_button("+ عقد جديد")
+        new_button.clicked.connect(self._new_contract)
+        header.add_action(new_button)
+
+        layout.addWidget(header)
+
+        content = QHBoxLayout()
+        content.setSpacing(12)
+
+        table_card = Card()
+        self.table = DataTable(
+            [
+                ("contract_number", "رقم العقد"),
+                ("customer_name", "العميل"),
+                ("plate_number", "اللوحة"),
+                ("start_date", "البداية"),
+                ("expected_end_date", "الانتهاء"),
+                ("balance_due", "المتبقّي"),
+                ("status", "الحالة"),
+                ("payment_status", "الدفع"),
+            ],
+            stretch_column=1,
+        )
+        self.table.selectionModel().selectionChanged.connect(self._on_select)
+        table_card.body.addWidget(self.table)
+        content.addWidget(table_card, 7)
+
+        detail_card = Card()
+        self.detail_title = QLabel("اختر عقداً لعرض تفاصيله")
+        self.detail_title.setObjectName("sectionTitle")
+        self.detail_body = QLabel("")
+        self.detail_body.setWordWrap(True)
+        self.detail_body.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.payments_table = DataTable(
+            [("paid_at", "التاريخ"), ("amount", "المبلغ"), ("method", "الطريقة")],
+            stretch_column=0,
+        )
+        self.payments_table.setMaximumHeight(180)
+
+        actions = QVBoxLayout()
+        row1 = QHBoxLayout()
+        row2 = QHBoxLayout()
+
+        self.payment_button = primary_button("تسجيل دفعة")
+        self.payment_button.clicked.connect(self._add_payment)
+        self.close_button = QPushButton("إغلاق العقد")
+        self.close_button.clicked.connect(self._close_contract)
+        self.extend_button = QPushButton("تمديد")
+        self.extend_button.clicked.connect(self._extend)
+        self.print_button = QPushButton("طباعة PDF")
+        self.print_button.clicked.connect(self._print)
+        self.cancel_button = QPushButton("إلغاء العقد")
+        self.cancel_button.setObjectName("danger")
+        self.cancel_button.clicked.connect(self._cancel)
+
+        for button in (self.payment_button, self.close_button, self.extend_button):
+            row1.addWidget(button)
+        for button in (self.print_button, self.cancel_button):
+            row2.addWidget(button)
+        row2.addStretch(1)
+
+        actions.addLayout(row1)
+        actions.addLayout(row2)
+
+        detail_card.body.addWidget(self.detail_title)
+        detail_card.body.addWidget(self.detail_body)
+        detail_card.body.addLayout(actions)
+        detail_card.body.addWidget(QLabel("الدفعات المسجَّلة"))
+        detail_card.body.addWidget(self.payments_table)
+        # يدفع المحتوى إلى الأعلى فلا تتوزّع المساحة الفائضة بين العناصر
+        detail_card.body.addStretch(1)
+
+        content.addWidget(detail_card, 3)
+        layout.addLayout(content, 1)
+
+        self._set_actions_enabled(None)
+
+    # ------------------------------------------------------------------
+    def _set_actions_enabled(self, contract):
+        is_open = bool(contract) and contract["status"] == "open"
+        has_balance = bool(contract) and int(contract["balance_due"]) > 0
+
+        self.payment_button.setEnabled(bool(contract) and has_balance
+                                       and contract["status"] != "cancelled")
+        self.close_button.setEnabled(is_open)
+        self.extend_button.setEnabled(is_open)
+        self.print_button.setEnabled(bool(contract))
+        self.cancel_button.setEnabled(
+            bool(contract) and contract["status"] != "cancelled" and session.has_role("admin")
+        )
+
+    def _selected(self):
+        contract_id = self.table.selected_id()
+        return contracts_repo.get(contract_id) if contract_id else None
+
+    def _format(self, row, key):
+        symbol = settings_repo.symbol_of(row["currency_code"]) if "currency_code" in row.keys() else ""
+        if key in ("total_amount", "balance_due", "amount", "paid_amount"):
+            return money.format_amount(row[key], symbol)
+        if key == "status":
+            return config.CONTRACT_STATUS_LABELS.get(row["status"], row["status"])
+        if key == "payment_status":
+            return config.PAYMENT_STATUS_LABELS.get(row["payment_status"], "")
+        if key == "method":
+            return config.PAYMENT_METHOD_LABELS.get(row["method"], row["method"])
+        if key == "paid_at":
+            return str(row["paid_at"])[:16]
+        return row[key] if key in row.keys() else ""
+
+    def _payment_format(self, row, key):
+        if key == "amount":
+            contract = self._selected()
+            symbol = settings_repo.symbol_of(contract["currency_code"]) if contract else ""
+            return money.format_amount(row["amount"], symbol)
+        return self._format(row, key)
+
+    def _on_select(self):
+        contract = self._selected()
+        if contract is None:
+            self.detail_title.setText("اختر عقداً لعرض تفاصيله")
+            self.detail_body.setText("")
+            self.payments_table.fill([])
+            self._set_actions_enabled(None)
+            return
+
+        symbol = settings_repo.symbol_of(contract["currency_code"])
+        overdue = ""
+        if contract["status"] == "open":
+            expected = datetime.date.fromisoformat(contract["expected_end_date"])
+            late = (datetime.date.today() - expected).days
+            if late > 0:
+                overdue = "\n⚠ متأخّر عن موعد التسليم بـ %d يوم" % late
+
+        self.detail_title.setText("العقد %s" % contract["contract_number"])
+        self.detail_body.setText(fix_dates(
+            "العميل: %s (%s)\nالسيارة: %s — %s\n"
+            "المدّة: %s ← %s (%d يوم)\n"
+            "الإجمالي: %s  |  المدفوع: %s  |  المتبقّي: %s\n"
+            "الحالة: %s  |  الدفع: %s\nأنشأه: %s%s"
+            % (
+                contract["customer_name"], contract["customer_phone"],
+                contract["vehicle_title"], contract["plate_number"],
+                contract["start_date"],
+                contract["actual_end_date"] or contract["expected_end_date"],
+                contract["days_count"],
+                money.format_amount(contract["total_amount"], symbol),
+                money.format_amount(contract["paid_amount"], symbol),
+                money.format_amount(contract["balance_due"], symbol),
+                config.CONTRACT_STATUS_LABELS.get(contract["status"], ""),
+                config.PAYMENT_STATUS_LABELS.get(contract["payment_status"], ""),
+                contract["created_by_name"] or "—",
+                overdue,
+            )
+        ))
+
+        self.payments_table.fill(
+            payments_repo.of_contract(contract["id"]), self._payment_format
+        )
+        self._set_actions_enabled(contract)
+
+    # ------------------------------------------------------------------
+    def _new_contract(self):
+        dialog = NewContractDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+            if dialog.created_id and confirm(self, "هل تريد طباعة العقد الآن؟"):
+                self._print(dialog.created_id)
+
+    def _add_payment(self):
+        contract = self._selected()
+        if contract is None:
+            return
+        if PaymentDialog(contract, self).exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _close_contract(self):
+        contract = self._selected()
+        if contract is None:
+            return
+        if CloseContractDialog(contract, self).exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _extend(self):
+        contract = self._selected()
+        if contract is None:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("تمديد العقد %s" % contract["contract_number"])
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QVBoxLayout(dialog)
+
+        form = QFormLayout()
+        new_date = date_field(
+            QDate.fromString(contract["expected_end_date"], "yyyy-MM-dd").addDays(1)
+        )
+        form.addRow("تاريخ الانتهاء الجديد", new_date)
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        save = primary_button("تمديد")
+        save.clicked.connect(dialog.accept)
+        cancel = QPushButton("إلغاء")
+        cancel.clicked.connect(dialog.reject)
+        buttons.addStretch(1)
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            estimate = rental_service.extend_contract(
+                contract["id"], new_date.date().toString("yyyy-MM-dd")
+            )
+        except Exception as error:
+            show_error(self, error)
+            return
+
+        symbol = settings_repo.symbol_of(contract["currency_code"])
+        show_info(
+            self,
+            "تم التمديد. المدّة الجديدة %d يوم، والإجمالي %s."
+            % (estimate["days"], money.format_amount(estimate["total"], symbol)),
+        )
+        self.refresh()
+
+    def _print(self, contract_id=None):
+        contract_id = contract_id or self.table.selected_id()
+        if not contract_id:
+            return
+        try:
+            path = contract_pdf.export_pdf(contract_id)
+        except Exception as error:
+            show_error(self, "تعذّر توليد ملف العقد: %s" % error)
+            return
+        show_info(self, "حُفظ العقد بصيغة PDF في:\n%s" % path)
+
+    def _cancel(self):
+        contract = self._selected()
+        if contract is None:
+            return
+        if not confirm(
+            self,
+            "إلغاء العقد %s سيحرّر السيارة ويُبقي سجلّ العقد ودفعاته. هل تريد المتابعة؟"
+            % contract["contract_number"],
+        ):
+            return
+
+        try:
+            rental_service.cancel_contract(contract["id"], reason="إلغاء يدوي")
+        except Exception as error:
+            show_error(self, error)
+            return
+
+        show_info(self, "تم إلغاء العقد.")
+        self.refresh()
+
+    def refresh(self):
+        try:
+            rows = contracts_repo.search(
+                term=self.search.text(),
+                status=self.status_filter.currentData() or None,
+                payment_status=self.payment_filter.currentData() or None,
+            )
+            self.table.fill(rows, self._format)
+            self._on_select()
+        except Exception as error:
+            show_error(self, error)

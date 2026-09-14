@@ -3,3 +3,16 @@ __pycache__/
 .env
 venv/
 .venv/
+
+# --- منظومة إدارة مكتب إيجار السيارات ---
+car_rental/build/dist/
+car_rental/build/work/
+car_rental/build/installer/
+car_rental/.venv/
+car_rental/.pytest_cache/
+*.db
+*.db-wal
+*.db-shm
+*.db.gz
+credentials.json
+token.json
