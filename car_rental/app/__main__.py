@@ -43,6 +43,11 @@ def _bootstrap(data_dir=None):
     config.ensure_directories()
     db.initialize()
 
+    # حالة الاشتراك تُفحص قبل أي شيء، فتُثبَّت مزايا النسخة على التطبيق كلّه
+    from .services import subscription
+
+    subscription.boot()
+
     # مرور الوقت وحده يغيّر حالة الأسطول: حجز الغد يصير إيجار اليوم، وعقد انتهى
     # أمس يترك سيارته متاحة — وقد يقع ذلك والتطبيق مغلق.
     from .repositories import vehicles_repo
@@ -59,10 +64,13 @@ def run_gui(self_test=False):
     from .ui.login_window import LoginWindow
     from .ui.main_window import MainWindow
 
+    from .services import subscription
+    from .ui.activation_window import ActivationWindow
+
     app = QApplication.instance() or QApplication(sys.argv[:1])
     rtl.apply(app)
 
-    state = {"main_window": None}
+    state = {"main_window": None, "activation": None}
 
     login = LoginWindow()
 
@@ -73,7 +81,24 @@ def run_gui(self_test=False):
         window.show()
 
     login.logged_in.connect(on_login)
-    login.show()
+
+    # الاشتراك يُفحص قبل شاشة الدخول: لا معنى لتسجيل دخول إلى برنامج مقفل
+    status = subscription.status()
+    if status.is_usable and not self_test:
+        login.show()
+    elif not self_test:
+        activation = ActivationWindow(status)
+        state["activation"] = activation
+
+        def on_activated(new_status):
+            if new_status.is_usable:
+                activation.close()
+                login.show()
+
+        activation.activated.connect(on_activated)
+        activation.show()
+    else:
+        login.show()
 
     if self_test:
         # فحص ذاتي: نبني النافذة الرئيسية بحساب وهمي ثم نخرج فوراً.

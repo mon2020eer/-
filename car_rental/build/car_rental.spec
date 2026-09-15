@@ -33,6 +33,9 @@ a = Analysis(
         "google_auth_oauthlib.flow",
         "google.auth.transport.requests",
         "google.oauth2.credentials",
+        # التحقّق من توقيع مفتاح الاشتراك: تُستورد داخل الدوال لا في رأس الوحدة
+        "cryptography.hazmat.primitives.asymmetric.ed25519",
+        "cryptography.hazmat.primitives.serialization",
     ],
     hookspath=[],
     runtime_hooks=[],

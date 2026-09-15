@@ -9,7 +9,7 @@
 import csv
 import datetime
 
-from ..core import db, money, session
+from ..core import db, features, money, session
 from ..repositories import maintenance_repo, settings_repo
 
 _RATE = money.RATE_SCALE
@@ -103,6 +103,7 @@ def monthly_revenue(months=12, conn=None):
     )
 
 
+@features.requires_feature("reports")
 def revenue_report(start_date, end_date, conn=None):
     """تقرير إيرادات فترة: العقود والمقبوض والمتبقّي ومصاريف الصيانة."""
     contracted = db.scalar(
@@ -216,6 +217,7 @@ def fleet_report(conn=None):
 # ---------------------------------------------------------------------------
 # التصدير
 # ---------------------------------------------------------------------------
+@features.requires_feature("export")
 def export_rows_to_csv(rows, headers, path, money_columns=()):
     """يصدّر صفوفاً إلى ملف CSV يفتحه Excel العربي بلا تشويه.
 

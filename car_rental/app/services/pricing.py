@@ -20,6 +20,8 @@
 import datetime
 import math
 
+from ..core import arabic
+
 MIN_DAYS = 1
 DAYS_PER_WEEK = 7
 HOURS_PER_DAY = 24
@@ -240,31 +242,17 @@ def _row_value(row, key, default=None):
     return default
 
 
-def arabic_count(number, one, two, few, many):
-    """صياغة العدد بالعربية صياغةً سليمة.
-
-    العربية تميّز المفرد والمثنّى وجمع القلّة (3–10) وجمع الكثرة (11 فأكثر)،
-    وتجاهل ذلك يُنتج «6 ساعة» و«2 يوم» وهو ركيك في وثيقة يوقّعها عميل.
-
-    >>> arabic_count(6, "ساعة واحدة", "ساعتان", "ساعات", "ساعة")
-    '6 ساعات'
-    """
-    number = int(number or 0)
-    if number == 1:
-        return one
-    if number == 2:
-        return two
-    if 3 <= number % 100 <= 10:
-        return "%d %s" % (number, few)
-    return "%d %s" % (number, many)
+# تمييز العدد صار في ``core/arabic.py`` ليستعمله الترخيص والواجهة أيضاً،
+# ويُصدَّر من هنا حفاظاً على النداءات القائمة.
+arabic_count = arabic.count
 
 
 def describe_duration(hours):
     """وصف عربي للمدّة: «3 أيام و5 ساعات»."""
-    days, remainder = divmod(int(hours or 0), HOURS_PER_DAY)
+    day_count, remainder = divmod(int(hours or 0), HOURS_PER_DAY)
     parts = []
-    if days:
-        parts.append(arabic_count(days, "يوم واحد", "يومان", "أيام", "يوماً"))
-    if remainder or not days:
-        parts.append(arabic_count(remainder, "ساعة واحدة", "ساعتان", "ساعات", "ساعة"))
+    if day_count:
+        parts.append(arabic.days(day_count))
+    if remainder or not day_count:
+        parts.append(arabic.hours(remainder))
     return " و".join(parts)

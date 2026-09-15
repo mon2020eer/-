@@ -4,7 +4,7 @@
 import datetime
 
 from .. import config
-from ..core import audit, db, security, session
+from ..core import audit, db, features, security, session
 
 
 class AuthError(Exception):
@@ -120,6 +120,7 @@ def must_change_password(user_id, conn=None):
 
 
 @session.requires_role("admin")
+@features.requires_feature("multi_user")
 def create(username, full_name, password, role, phone=None, conn=None):
     """ينشئ مستخدماً جديداً — للمدير فقط."""
     username = (username or "").strip()

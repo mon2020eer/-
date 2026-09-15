@@ -6,7 +6,7 @@ import shutil
 import uuid
 
 from .. import config
-from ..core import audit, db, session
+from ..core import audit, db, features, session
 from . import _sql
 
 _FIELDS = (
@@ -111,6 +111,7 @@ def _validate(data, customer_id=None, conn=None):
 
 def create(data, conn=None):
     session.require_login()
+    features.require("customers")
     _validate(data, conn=conn)
 
     with db.transaction(conn) as tx:

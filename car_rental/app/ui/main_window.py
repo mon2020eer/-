@@ -16,8 +16,9 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import config
-from ..core import db, session
+from ..core import arabic, db, features, session
 from ..services.backup.scheduler import BackupScheduler
+from .activation_window import ActivationWindow, SubscriptionPage
 from .pages.backup_page import BackupPage
 from .pages.contracts_page import ContractsPage
 from .pages.customers_page import CustomersPage
@@ -64,15 +65,30 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
         self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage(
-            "مرحباً %s — الصلاحية: %s"
-            % (self.user.full_name, config.ROLE_LABELS.get(self.user.role, self.user.role))
-        )
+        self.statusBar().showMessage(self._status_line())
 
         self._register_pages()
         if self._pages:
             self._nav_buttons.buttons()[0].setChecked(True)
             self._switch(0)
+
+    def _status_line(self):
+        """سطر الحالة: المستخدم وصلاحيته ونسخة الاشتراك وما تبقّى منها."""
+        from ..services import subscription
+
+        parts = [
+            "مرحباً %s" % self.user.full_name,
+            "الصلاحية: %s" % config.ROLE_LABELS.get(self.user.role, self.user.role),
+            features.tier_label(),
+        ]
+        try:
+            status = subscription.status()
+            if status.is_expiring_soon:
+                parts.append("⚠ تبقّى %s على انتهاء الاشتراك"
+                             % arabic.days(max(status.days_left, 0)))
+        except Exception:
+            pass
+        return "  —  ".join(parts)
 
     def _build_sidebar(self):
         sidebar = QWidget()
@@ -118,20 +134,25 @@ class MainWindow(QMainWindow):
 
     def _register_pages(self):
         """يضيف الصفحات المسموحة لصلاحية المستخدم الحالي."""
+        # (العنوان، الصفحة، الأدوار، الميزة المطلوبة أو None)
         entries = [
-            ("لوحة المعلومات", DashboardPage, ("admin", "staff")),
-            ("العقود", ContractsPage, ("admin", "staff")),
-            ("العملاء", CustomersPage, ("admin", "staff")),
-            ("السيارات", VehiclesPage, ("admin", "staff")),
-            ("الصيانة والمخالفات", MaintenancePage, ("admin", "staff")),
-            ("التقارير", ReportsPage, ("admin",)),
-            ("المستخدمون", UsersPage, ("admin",)),
-            ("النسخ الاحتياطي", BackupPage, ("admin",)),
-            ("الإعدادات", SettingsPage, ("admin",)),
+            ("لوحة المعلومات", DashboardPage, ("admin", "staff"), None),
+            ("العقود", ContractsPage, ("admin", "staff"), "contracts"),
+            ("العملاء", CustomersPage, ("admin", "staff"), "customers"),
+            ("السيارات", VehiclesPage, ("admin", "staff"), "vehicles"),
+            ("الصيانة والمخالفات", MaintenancePage, ("admin", "staff"), "maintenance"),
+            ("التقارير", ReportsPage, ("admin",), "reports"),
+            ("المستخدمون", UsersPage, ("admin",), "multi_user"),
+            ("النسخ الاحتياطي", BackupPage, ("admin",), "cloud_backup"),
+            ("الاشتراك", SubscriptionPage, ("admin",), None),
+            ("الإعدادات", SettingsPage, ("admin",), None),
         ]
 
-        for label, page_class, roles in entries:
+        for label, page_class, roles, feature in entries:
             if self.user.role not in roles:
+                continue
+            # صفحة خارج النسخة الحالية لا تُبنى أصلاً: لا مساحة ولا زمن إقلاع
+            if feature and not features.has_feature(feature):
                 continue
 
             page = page_class(self)

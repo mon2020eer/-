@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """مستودع الصيانة والمخالفات المرورية."""
 
-from ..core import audit, db, session
+from ..core import audit, db, features, session
 
 
 # ---------------------------------------------------------------------------
 # الصيانة
 # ---------------------------------------------------------------------------
+@features.requires_feature("maintenance")
 def open_maintenance(vehicle_id, description, kind="repair", cost=0,
                      currency_code="LYD", workshop=None, odometer=None, conn=None):
     """يفتح سجلّ صيانة وينقل السيارة إلى حالة «في الصيانة».
@@ -119,6 +120,7 @@ def maintenance_cost_total(start_date, end_date, conn=None):
 # ---------------------------------------------------------------------------
 # المخالفات المرورية
 # ---------------------------------------------------------------------------
+@features.requires_feature("violations")
 def add_violation(vehicle_id, occurred_at, description, amount=0,
                   currency_code="LYD", contract_id=None, reference=None,
                   is_charged_to_customer=1, conn=None):

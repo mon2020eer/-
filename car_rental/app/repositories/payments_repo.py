@@ -6,7 +6,7 @@
 «مدفوع» بلا دفعات مسجَّلة.
 """
 
-from ..core import audit, db, session
+from ..core import audit, db, features, session
 
 
 def of_contract(contract_id, conn=None):
@@ -31,6 +31,8 @@ def add(contract_id, amount, method="cash", kind="payment", note=None,
     تكون بتعديل قيمة العقد أو بتسجيل مبلغ مُعاد (kind='refund').
     """
     user = session.require_login()
+    features.require("payments")
+
     amount = int(amount or 0)
     if amount <= 0:
         raise ValueError("قيمة الدفعة يجب أن تكون أكبر من صفر.")

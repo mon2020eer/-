@@ -92,9 +92,56 @@ def test_main_window_builds_for_admin(gui, admin):
     window.show()
     gui.processEvents()
 
-    # المدير يرى كل الصفحات التسع
-    assert window.stack.count() == 9
+    # المدير في النسخة المتقدّمة يرى كل الصفحات العشر
+    assert window.stack.count() == 10
     window.close()
+
+
+def test_basic_tier_hides_premium_pages(gui, conn, admin):
+    """النسخة الأساسية لا تبني صفحات النسخة المتقدّمة أصلاً."""
+    from app.core import features
+    from app.ui.main_window import MainWindow
+    from app.ui.pages.backup_page import BackupPage
+    from app.ui.pages.maintenance_page import MaintenancePage
+    from app.ui.pages.reports_page import ReportsPage
+
+    features.set_tier(features.TIER_BASIC)
+    try:
+        window = MainWindow(admin)
+        window.show()
+        gui.processEvents()
+
+        pages = [type(window.stack.widget(i)) for i in range(window.stack.count())]
+        assert ReportsPage not in pages
+        assert BackupPage not in pages
+        assert MaintenancePage not in pages
+        assert window.stack.count() < 10
+        window.close()
+    finally:
+        features.set_tier(features.TIER_PRO)
+
+
+def test_activation_window_builds(gui, conn):
+    from app.ui.activation_window import ActivationWindow
+
+    window = ActivationWindow()
+    window.show()
+    gui.processEvents()
+
+    assert window.machine_value.text()          # بصمة الجهاز تُعرض للنسخ
+    assert window.key_input is not None
+    window.close()
+
+
+def test_subscription_page_reports_state(gui, conn):
+    from app.ui.activation_window import SubscriptionPage
+
+    page = SubscriptionPage()
+    page.refresh()
+    gui.processEvents()
+
+    assert "بصمة هذا الجهاز" in page.status_label.text()
+    page.deleteLater()
 
 
 def test_staff_sees_fewer_pages(gui, conn, admin):

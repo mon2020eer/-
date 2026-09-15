@@ -88,6 +88,20 @@ def sample_vehicle(admin, conn):
     )
 
 
+@pytest.fixture(autouse=True)
+def _default_tier():
+    """يبدأ كل اختبار من النسخة المتقدّمة.
+
+    ضروري لأن النسخة الفعّالة حالة عامّة على مستوى العملية: اختبار يفعّل النسخة
+    الأساسية أو ينهي اشتراكاً كان سيُسرّب حالته إلى ما بعده.
+    """
+    from app.core import features
+
+    features.set_tier(features.TIER_PRO)
+    yield
+    features.set_tier(features.TIER_PRO)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _offscreen_qt():
     """يمنع Qt من محاولة فتح نافذة حقيقية في بيئة الاختبار."""

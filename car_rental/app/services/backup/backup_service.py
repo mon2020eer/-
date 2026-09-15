@@ -18,7 +18,7 @@ import shutil
 import sqlite3
 
 from ... import config
-from ...core import audit, db, session
+from ...core import audit, db, features, session
 from ...repositories import settings_repo
 from . import drive_client
 
@@ -115,6 +115,7 @@ def verify_snapshot(archive_path):
     return True
 
 
+@features.requires_feature("cloud_backup")
 def run_backup(mode="manual", conn=None, keep_local=True):
     """ينفّذ دورة نسخ كاملة إلى Google Drive ويُرجع ملخّص النتيجة.
 

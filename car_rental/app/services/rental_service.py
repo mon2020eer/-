@@ -18,7 +18,7 @@
 import datetime
 import sqlite3
 
-from ..core import audit, db, session
+from ..core import audit, db, features, session
 from ..repositories import contracts_repo, payments_repo, vehicles_repo
 from . import pricing
 
@@ -68,6 +68,7 @@ def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
     وتبقى حالتها «مؤجَّرة» حتى ينتهي العقد الجاري ثم يبدأ الحجز في موعده.
     """
     user = session.require_login()
+    features.require("contracts")
 
     customer = db.query_one(
         "SELECT * FROM customers WHERE id = ?", (customer_id,), conn=conn
@@ -183,6 +184,9 @@ def close_contract(contract_id, actual_end_date=None, extra_charges=0,
         raise RentalError("العقد غير موجود.")
     if contract["status"] != "open":
         raise RentalError("هذا العقد غير مفتوح أصلاً.")
+
+    if hourly:
+        features.require("hourly_billing")
 
     actual_end_date = actual_end_date or _today()
     end_time = pricing.parse_time(actual_end_time).strftime("%H:%M") if hourly else None

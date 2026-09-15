@@ -16,3 +16,8 @@ car_rental/.pytest_cache/
 *.db.gz
 credentials.json
 token.json
+
+# أسرار الترخيص — لا تُودَع في المستودع أبداً
+*.license_private.key
+.car_rental_license_private.key
+car_rental/tools/issued_licenses.jsonl

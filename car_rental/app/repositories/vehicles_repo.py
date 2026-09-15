@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """مستودع السيارات."""
 
-from ..core import audit, db, session
+from ..core import audit, db, features, session
 from . import _sql
 
 _FIELDS = (
@@ -212,6 +212,18 @@ def _validate(data, vehicle_id=None, conn=None):
 
 def create(data, conn=None):
     session.require_login()
+    features.require("vehicles")
+
+    # حدّ النسخة الأساسية: يُفحص هنا لا في الواجهة، فلا يُتجاوز بأي طريق
+    limit = features.vehicle_limit()
+    if limit:
+        current = db.scalar("SELECT COUNT(*) FROM vehicles", conn=conn, default=0)
+        if current >= limit:
+            raise features.FeatureLocked(
+                "بلغت حدّ النسخة الأساسية (%d سيارة).\n"
+                "للترقية إلى النسخة المتقدّمة راجع مزوّد البرنامج." % limit
+            )
+
     _validate(data, conn=conn)
 
     with db.transaction(conn) as tx:
