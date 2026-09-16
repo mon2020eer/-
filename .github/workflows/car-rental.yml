@@ -20,19 +20,27 @@ jobs:
   # 1) الاختبارات على لينكس: أسرع وأرخص، وتكفي للتحقّق من المنطق والواجهة
   # ---------------------------------------------------------------------------
   tests:
-    name: الاختبارات
+    name: الاختبارات (بايثون ${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
       run:
         working-directory: car_rental
 
+    strategy:
+      fail-fast: false
+      matrix:
+        # إصدار قديم وآخر حديث: المكاتب تشتري أجهزة جديدة ببايثون جديد، وتثبيتٌ
+        # صارم يصلح اليوم ويُرفض غداً. صدور بايثون 3.14 كسر بناء المالك فعلاً
+        # ولم يكشفه CI لأنه كان يعمل على 3.11 وحدها.
+        python: ["3.11", "3.13"]
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "${{ matrix.python }}"
           cache: pip
           cache-dependency-path: car_rental/requirements.txt
 
@@ -81,7 +89,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller==6.10.0 pytest
+          pip install "pyinstaller>=6.15,<7" pytest
 
       - name: بناء التطبيق
         run: pyinstaller build/car_rental.spec --noconfirm --distpath build/dist --workpath build/work
