@@ -280,6 +280,15 @@ def test_rented_vehicle_is_still_bookable_in_the_dialog(gui, conn):
 
 
 def test_close_dialog_offers_hourly_settlement(gui, conn):
+    """التسوية بالساعة عند الإرجاع المبكّر.
+
+    وقت التسليم يُضبط صراحةً بعد وقت الاستلام. كان الاختبار يتّكل على الوقت
+    الافتراضي في الحوار — وهو **ساعة الجهاز الآن** — فينجح بعد الظهر ويفشل
+    قبله، لأن عقد الاختبار يبدأ الساعة ١٢:٠٠ فيصير التسليم سابقاً للاستلام.
+    والبرنامج كان مُحقّاً في رفضه؛ الاختبار وحده هو من كان يتأرجح مع الساعة.
+    """
+    from PyQt6.QtCore import QTime
+
     from app.repositories import contracts_repo
     from app.ui.pages.contracts_page import CloseContractDialog
 
@@ -290,12 +299,33 @@ def test_close_dialog_offers_hourly_settlement(gui, conn):
     assert not dialog.hourly.isChecked()          # الافتراضي بالأيام
     daily_preview = dialog.preview.text()
 
+    start = QTime.fromString(contract["start_time"], "HH:mm")
+    dialog.end_time.setTime(start.addSecs(6 * 3600))
     dialog.hourly.setChecked(True)
     gui.processEvents()
     hourly_preview = dialog.preview.text()
 
-    assert "ساعة" in hourly_preview
+    assert "ساعة" in hourly_preview, hourly_preview
     assert hourly_preview != daily_preview
+    dialog.close()
+
+
+def test_close_dialog_refuses_a_return_before_pickup(gui, conn):
+    """الوجه الآخر: تسليمٌ قبل الاستلام يُرفض صراحةً لا يُحسب بالسالب."""
+    from PyQt6.QtCore import QTime
+
+    from app.repositories import contracts_repo
+    from app.ui.pages.contracts_page import CloseContractDialog
+
+    contract = contracts_repo.search(status="open", limit=1, conn=conn)[0]
+    dialog = CloseContractDialog(contract)
+
+    start = QTime.fromString(contract["start_time"], "HH:mm")
+    dialog.end_time.setTime(start.addSecs(-3600))
+    dialog.hourly.setChecked(True)
+    gui.processEvents()
+
+    assert "يسبق" in dialog.preview.text()
     dialog.close()
 
 

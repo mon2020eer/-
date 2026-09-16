@@ -26,11 +26,28 @@ _SCHEMA_FILE = pathlib.Path(__file__).with_name("schema.sql")
 
 
 def _configure(conn):
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    """يضبط اتصالاً جديداً، ويُغلقه إن تعذّر ضبطه.
+
+    ``sqlite3.connect`` **ينجح على أي ملف** ولا يقرأ محتواه، ولا يظهر أن الملف
+    ليس قاعدة بيانات إلّا عند أول استعلام — أي داخل هذه الدالّة. وبلا الإغلاق
+    هنا يبقى مِقبض الملف مفتوحاً بعد الاستثناء:
+
+      • على ويندوز يمنع ذلك حذف الملف («The process cannot access the file
+        because it is being used by another process»)، فيُخفي خطأُ النظام
+        رسالةَ التطبيق الصريحة، وتتراكم ملفات مؤقّتة في مجلد النسخ.
+      • وعلى لينكس يُحذف الملف بلا شكوى، فلا يظهر العطب في الاختبارات.
+
+    ولذلك أُصلح هنا لا في موضع الاستعمال: التسريب في فتح الاتصال لا في من فتحه.
+    """
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 

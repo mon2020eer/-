@@ -108,7 +108,13 @@ def verify_snapshot(archive_path):
         # ملف غير مضغوط صحيح، أو مضغوط لكنّه ليس قاعدة بيانات SQLite أصلاً
         raise BackupError("ملف النسخة تالف أو غير صالح: %s" % error)
     finally:
-        temp_db.unlink(missing_ok=True)
+        # تنظيف ملف مؤقّت لا يجوز أن يطغى على سبب الفشل الحقيقي: لو تعذّر
+        # حذفه — لأن مضاد فيروسات يفحصه مثلاً — فالمهمّ أن تصل رسالة التلف
+        # إلى المستخدم، لا أن يحلّ محلّها خطأ نظام غامض.
+        try:
+            temp_db.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     if result != "ok" or not tables:
         raise BackupError("ملف النسخة تالف ولا يصلح للاستعادة.")

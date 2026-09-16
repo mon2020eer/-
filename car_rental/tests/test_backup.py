@@ -194,3 +194,61 @@ def test_restore_refuses_corrupt_backup(conn, admin, fake_drive, tmp_path):
 
     # قاعدة البيانات الأصلية سليمة ولم تُمس
     assert config.DB_PATH.is_file()
+
+
+# ---------------------------------------------------------------------------
+# تسريب مِقبض الملف عند فتح اتصال على ملف ليس قاعدة بيانات
+# ---------------------------------------------------------------------------
+def test_failed_connect_closes_the_handle(app_home, tmp_path, monkeypatch):
+    """اتصال فشل ضبطُه يجب أن يُغلق، وإلّا بقي مِقبض الملف مفتوحاً.
+
+    ``sqlite3.connect`` ينجح على أي ملف ولا يقرأ محتواه؛ ولا يظهر أنه ليس
+    قاعدة بيانات إلّا عند أول استعلام — بعد أن صار الاتصال قائماً. وتركُه
+    مفتوحاً يمنع حذف الملف على ويندوز، فيحلّ خطأ النظام محلّ رسالة التطبيق.
+
+    يُفحص هنا بمراقبة الاتصال نفسه لا بمحاولة الحذف: الحذف ينجح على لينكس ولو
+    بقي المِقبض مفتوحاً، فلا يكشف العطب — وهذا ما جعله يمرّ حتى ظهر على ويندوز.
+    """
+    import sqlite3
+
+    from app.core import db
+
+    opened = []
+    real_connect = sqlite3.connect
+
+    def spy(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", spy)
+
+    garbage = tmp_path / "ليست-قاعدة.db"
+    garbage.write_bytes(b"\x00\x01 not a database at all")
+
+    with pytest.raises(sqlite3.DatabaseError):
+        db.connect(garbage)
+
+    assert opened, "لم يُفتح اتصال أصلاً — تغيّر مسار التنفيذ"
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[-1].execute("SELECT 1")          # مغلق فعلاً
+
+
+def test_verify_snapshot_leaves_no_temp_file_behind(conn, admin, tmp_path):
+    """النسخة التالفة تُرفض **ولا تترك أثراً** في مجلد النسخ.
+
+    الملف المؤقّت `.verify.db` كان يبقى على ويندوز لأن مِقبضه لم يُغلق،
+    فتتراكم ملفات لا يعرف صاحب المكتب ما هي ولا يجرؤ على حذفها.
+    """
+    bad = tmp_path / "corrupt.db.gz"
+    with gzip.open(bad, "wb") as handle:
+        handle.write("ليست قاعدة بيانات إطلاقاً".encode("utf-8"))
+
+    with pytest.raises(backup_service.BackupError) as error:
+        backup_service.verify_snapshot(bad)
+
+    # الرسالة رسالة التطبيق، لا خطأ نظام مسرَّب
+    assert "ملف النسخة تالف" in str(error.value)
+
+    leftovers = [path.name for path in tmp_path.glob("*.verify.db")]
+    assert leftovers == [], "بقيت ملفات مؤقّتة: %s" % leftovers

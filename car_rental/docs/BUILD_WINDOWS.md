@@ -172,6 +172,7 @@ icon=str(PROJECT_DIR / "build" / "icon.ico"),
 | `Missing closing '}' in statement block` عند تشغيل سكربت البناء | فُقدت علامة BOM من `build_exe.ps1` (يحدث إذا حُرّر وحُفظ بمحرّر يُسقطها). أعد جلب الملف: `git checkout build\build_exe.ps1` |
 | `Could not find a version that satisfies the requirement pyinstaller` | بايثون عندك أحدث ممّا تسمح به النسخة المطلوبة. **حدّث المستودع** (`git pull`) ولا تنزّل بايثون أقدم — الحلّ في السكربت لا في جهازك |
 | `No module named pytest` رغم نجاح التثبيت ظاهرياً | فشل تثبيت سابق ومضى السكربت. حدّث المستودع: صار يقف عند أول فشل ويسمّيه |
+| `WARNING: The scripts … are installed in '…\Scripts' which is not on PATH` | تحذير لا خطأ، ولا يمنع البناء: السكربت ينادي الأدوات بـ `python -m` لا بأسمائها |
 
 ### لماذا لا تُثبَّت PyInstaller على رقم واحد؟
 
