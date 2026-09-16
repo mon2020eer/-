@@ -19,6 +19,7 @@ from .. import config
 from ..core import arabic, db, features, session
 from ..services.backup.scheduler import BackupScheduler
 from .activation_window import ActivationWindow, SubscriptionPage
+from .pages.alerts_page import AlertsPage
 from .pages.backup_page import BackupPage
 from .pages.contracts_page import ContractsPage
 from .pages.customers_page import CustomersPage
@@ -141,6 +142,7 @@ class MainWindow(QMainWindow):
             ("العملاء", CustomersPage, ("admin", "staff"), "customers"),
             ("السيارات", VehiclesPage, ("admin", "staff"), "vehicles"),
             ("الصيانة والمخالفات", MaintenancePage, ("admin", "staff"), "maintenance"),
+            ("التنبيهات", AlertsPage, ("admin", "staff"), "alerts"),
             ("التقارير", ReportsPage, ("admin",), "reports"),
             ("المستخدمون", UsersPage, ("admin",), "multi_user"),
             ("النسخ الاحتياطي", BackupPage, ("admin",), "cloud_backup"),

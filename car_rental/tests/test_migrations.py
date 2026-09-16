@@ -133,8 +133,13 @@ def upgraded(app_home):
     db.close_connection()
 
 
+def _latest_version():
+    """آخر إصدار في قائمة الترقيات — فلا يحتاج الاختبار تعديلاً مع كل ترقية."""
+    return max(number for number, _ in migrations.MIGRATIONS)
+
+
 def test_version_is_upgraded(upgraded):
-    assert migrations.current_version(upgraded) == 2
+    assert migrations.current_version(upgraded) == _latest_version()
 
 
 def test_existing_data_survives_the_upgrade(upgraded):
@@ -206,5 +211,111 @@ def test_views_are_rebuilt_after_upgrade(upgraded):
 def test_migration_is_idempotent(upgraded):
     """إعادة التهيئة مرّة أخرى لا تُفسد شيئاً ولا تُكرّر عملاً."""
     db.initialize(upgraded)
-    assert migrations.current_version(upgraded) == 2
+    assert migrations.current_version(upgraded) == _latest_version()
     assert upgraded.execute("SELECT COUNT(*) FROM contracts").fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# الترقية ٣: العميل الناقص والتأمين والكفيل
+# ---------------------------------------------------------------------------
+def test_customer_columns_become_optional(upgraded):
+    """إعادة بناء جدول العملاء تُسقط NOT NULL عن الهاتف والرقم والرخصة."""
+    columns = {row[1]: row for row in upgraded.execute("PRAGMA table_info(customers)")}
+
+    for name in ("phone", "national_id", "license_number"):
+        assert columns[name][3] == 0, "%s ما زال NOT NULL" % name
+    # والاسم يبقى إلزامياً: عميل بلا اسم لا معنى له
+    assert columns["full_name"][3] == 1
+
+
+def test_customer_can_be_created_with_a_name_only(upgraded):
+    upgraded.execute("INSERT INTO customers (full_name) VALUES (?)", ("زبون عابر",))
+    upgraded.commit()
+
+    row = upgraded.execute(
+        "SELECT phone, national_id, license_number FROM customers"
+        " WHERE full_name = ?", ("زبون عابر",)
+    ).fetchone()
+    assert tuple(row) == (None, None, None)
+
+
+def test_national_id_stays_unique_but_allows_many_empties(upgraded):
+    """التفرّد يبقى حارساً، وSQLite تسمح بتكرار NULL فيه — وهو ما نريده."""
+    import sqlite3
+
+    upgraded.execute("INSERT INTO customers (full_name) VALUES ('أول')")
+    upgraded.execute("INSERT INTO customers (full_name) VALUES ('ثانٍ')")
+    upgraded.commit()          # ناقصان معاً ولا تعارض
+
+    upgraded.execute(
+        "INSERT INTO customers (full_name, national_id) VALUES ('ثالث', 'ID-9')"
+    )
+    upgraded.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        upgraded.execute(
+            "INSERT INTO customers (full_name, national_id) VALUES ('رابع', 'ID-9')"
+        )
+
+
+def test_existing_customers_survive_the_rebuild(upgraded):
+    """إعادة بناء الجدول لا تفقد صفّاً ولا تغيّر معرّفاً ترتبط به العقود."""
+    rows = upgraded.execute(
+        "SELECT id, full_name, national_id FROM customers ORDER BY id"
+    ).fetchall()
+    assert rows, "لم يبقَ عميل بعد الترقية"
+
+    orphans = upgraded.execute(
+        "SELECT COUNT(*) FROM contracts c"
+        " LEFT JOIN customers cu ON cu.id = c.customer_id"
+        " WHERE cu.id IS NULL"
+    ).fetchone()[0]
+    assert orphans == 0, "عقود فقدت عملاءها بعد إعادة البناء"
+
+
+def test_insurance_and_guarantor_columns_exist(upgraded):
+    vehicle_columns = {row[1] for row in upgraded.execute("PRAGMA table_info(vehicles)")}
+    for name in ("insurance_company", "insurance_policy_no",
+                 "insurance_expiry", "inspection_expiry"):
+        assert name in vehicle_columns, name
+
+    contract_columns = {row[1] for row in
+                        upgraded.execute("PRAGMA table_info(contracts)")}
+    for name in ("guarantor_name", "guarantor_nationality",
+                 "guarantor_passport", "guarantor_address"):
+        assert name in contract_columns, name
+
+
+def test_upgrade_works_when_views_already_exist(app_home):
+    """الترقية على قاعدة **مستعمَلة** لا على واحدة نظيفة.
+
+    الحالة الواقعية: قاعدة وصلت الإصدار ٢ وأُعيد بناء عروضها، ثم صدر تحديث.
+    وSQLite ترفض إسقاط جدول العملاء أو إعادة تسميته ما دام عرضٌ قائم يذكره،
+    فتنهار الترقية برسالة مُضلّلة «no such table: main.customers».
+    وهذا ما وقع فعلاً عند أول تشغيل بعد التحديث.
+    """
+    from app.core import db, migrations
+
+    connection = db.initialize()
+    assert migrations.current_version(connection) == _latest_version()
+
+    views = {
+        row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'view'"
+        )
+    }
+    assert {"v_contracts_full", "v_contract_balance"} <= views
+
+    # نُرجع رقم الإصدار وحده: الجداول والعروض تبقى كما هي، فتُعاد الترقية ٣
+    # على قاعدة عروضها قائمة — وهي الحالة التي كانت تنهار.
+    connection.execute("PRAGMA user_version = 2")
+    connection.commit()
+
+    db.initialize(connection)          # يجب ألّا يرفع استثناءً
+    assert migrations.current_version(connection) == _latest_version()
+
+    connection.execute("INSERT INTO customers (full_name) VALUES ('بعد الترقية')")
+    connection.commit()
+    assert connection.execute(
+        "SELECT COUNT(*) FROM v_contracts_full"
+    ).fetchone()[0] is not None

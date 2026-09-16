@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """صفحة الصيانة والمخالفات المرورية (تبويبان في شاشة واحدة)."""
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -11,8 +10,8 @@ from ... import config
 from ...core import money
 from ...repositories import maintenance_repo, settings_repo, vehicles_repo
 from ..widgets.common import (
-    Card, DataTable, PageHeader, combo, confirm, date_field, money_field,
-    primary_button, show_error, show_info,
+    Card, DataTable, FormDialog, PageHeader, combo, confirm, date_field,
+    money_field, primary_button, show_error, show_info,
 )
 
 
@@ -30,18 +29,12 @@ def _currency_items():
             for row in settings_repo.list_currencies()]
 
 
-class MaintenanceDialog(QDialog):
+class MaintenanceDialog(FormDialog):
     """حوار فتح سجلّ صيانة جديد."""
-
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("إدخال سيارة إلى الصيانة")
-        self.setMinimumWidth(480)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        super().__init__(parent, title="إدخال سيارة إلى الصيانة", width=480)
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        form = self.form
 
         self.vehicle = combo(_vehicle_items(only_free=True))
         self.kind = combo(list(config.MAINTENANCE_KIND_LABELS.items()))
@@ -63,17 +56,7 @@ class MaintenanceDialog(QDialog):
         form.addRow("الورشة", self.workshop)
         form.addRow("قراءة العدّاد", self.odometer)
         form.addRow("الوصف *", self.description)
-        layout.addLayout(form)
-
-        buttons = QHBoxLayout()
-        save = primary_button("حفظ")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        self.add_buttons(save_text="حفظ", on_save=self._save)
 
     def _save(self):
         if self.vehicle.currentData() is None:
@@ -95,18 +78,12 @@ class MaintenanceDialog(QDialog):
         self.accept()
 
 
-class ViolationDialog(QDialog):
+class ViolationDialog(FormDialog):
     """حوار تسجيل مخالفة مرورية."""
-
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("تسجيل مخالفة مرورية")
-        self.setMinimumWidth(480)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        super().__init__(parent, title="تسجيل مخالفة مرورية", width=480)
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        form = self.form
 
         self.vehicle = combo(_vehicle_items())
         self.occurred_at = date_field()
@@ -125,24 +102,14 @@ class ViolationDialog(QDialog):
         form.addRow("رقم المخالفة", self.reference)
         form.addRow("", self.charged)
         form.addRow("الوصف *", self.description)
-        layout.addLayout(form)
-
         hint = QLabel(
             "إن كانت السيارة ضمن عقد في تاريخ المخالفة، تُربط المخالفة بذلك العقد تلقائياً."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self.add_widget(hint)
 
-        buttons = QHBoxLayout()
-        save = primary_button("حفظ")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        self.add_buttons(save_text="حفظ", on_save=self._save)
 
     def _save(self):
         if self.vehicle.currentData() is None:

@@ -9,8 +9,8 @@ import datetime
 
 from PyQt6.QtCore import QDate, Qt, QTime
 from PyQt6.QtWidgets import (
-    QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QCompleter, QDialog, QFormLayout, QHBoxLayout, QLabel,
+    QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ... import config
@@ -18,10 +18,11 @@ from ...core import money, session
 from ...repositories import (
     contracts_repo, customers_repo, payments_repo, settings_repo, vehicles_repo,
 )
-from ...services import contract_pdf, pricing, rental_service
+from ...services import alerts, contract_pdf, pricing, rental_service
 from ..widgets.common import (
-    Card, DataTable, PageHeader, combo, confirm, date_field, fix_dates,
-    money_field, primary_button, search_box, show_error, show_info, time_field,
+    Card, DataTable, FormDialog, PageHeader, combo, confirm, date_field,
+    fix_dates, money_field, primary_button, search_box, show_error, show_info,
+    time_field,
 )
 
 
@@ -41,30 +42,47 @@ def _vehicle_label(row):
     return title
 
 
-class NewContractDialog(QDialog):
+class NewContractDialog(FormDialog):
     """حوار فتح عقد إيجار جديد مع تسعيرة لحظية."""
 
     def __init__(self, parent=None, preset=None):
-        super().__init__(parent)
-        self.setWindowTitle("تجديد العقد" if preset else "عقد إيجار جديد")
-        self.setMinimumWidth(560)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        super().__init__(
+            parent,
+            title="تجديد العقد" if preset else "عقد إيجار جديد",
+            width=580,
+        )
 
         self._vehicle = None
+        self._insurance_alert = None
         self.created_id = None
         preset = preset or {}
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        form = self.form
 
         # العملاء مرتَّبون بالأكثر تعاملاً: من يتردّد على المكتب كثيراً يظهر أولاً
         # ولا يُبحث عنه في كل مرّة.
+        #
+        # والحقل **قابل للكتابة**: المكتب يستقبل زبوناً واقفاً أمامه، فيكتب اسمه
+        # ويمضي في العقد، ثم يُكمل وثائقه. وإلزامه بتسجيل العميل كاملاً أولاً
+        # يعطّل العمل ويدفعه إلى كتابة أرقام مُختلَقة.
         self.customer = combo(
             [(row["id"], _customer_label(row))
              for row in customers_repo.search(limit=2000, order_by="frequent")
              if not row["is_blacklisted"]]
         )
+        self.customer.setEditable(True)
+        self.customer.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.customer.lineEdit().setPlaceholderText(
+            "اكتب اسم العميل — إن كان جديداً يُسجَّل تلقائياً"
+        )
+
+        completer = QCompleter(
+            [self.customer.itemText(i) for i in range(self.customer.count())], self
+        )
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.customer.setCompleter(completer)
+        self.customer.setCurrentIndex(-1)
 
         # كل السيارات غير الخاضعة للصيانة قابلة للحجز — المؤجَّرة اليوم تُحجَز
         # لفترة لاحقة، وهو جوهر عمل مكتب محدود عدد السيارات.
@@ -92,6 +110,14 @@ class NewContractDialog(QDialog):
         self.odometer.setSuffix(" كم")
 
         self.pickup = QLineEdit()
+
+        # الكفيل: تطلبه نماذج عقود المكاتب المطبوعة، ويتغيّر بين عقد وآخر
+        # للعميل نفسه، فيُحفظ في العقد لا في ملفّ العميل.
+        self.guarantor_name = QLineEdit()
+        self.guarantor_nationality = QLineEdit()
+        self.guarantor_passport = QLineEdit()
+        self.guarantor_address = QLineEdit()
+
         self.notes = QPlainTextEdit()
         self.notes.setMaximumHeight(70)
 
@@ -106,26 +132,30 @@ class NewContractDialog(QDialog):
         form.addRow("طريقة دفع العربون", self.deposit_method)
         form.addRow("قراءة العدّاد عند الاستلام", self.odometer)
         form.addRow("مكان الاستلام", self.pickup)
+        form.addRow("اسم الكفيل", self.guarantor_name)
+        form.addRow("جنسية الكفيل", self.guarantor_nationality)
+        form.addRow("رقم جواز الكفيل", self.guarantor_passport)
+        form.addRow("عنوان الكفيل", self.guarantor_address)
         form.addRow("ملاحظات", self.notes)
-
-        layout.addLayout(form)
 
         # --- التسعيرة اللحظية ---
         self.quote_card = Card(margins=(14, 12, 14, 12), spacing=4)
         self.quote_label = QLabel("اختر سيارة وتواريخ لعرض التسعيرة.")
         self.quote_label.setWordWrap(True)
         self.quote_card.body.addWidget(self.quote_label)
-        layout.addWidget(self.quote_card)
+        self.add_widget(self.quote_card)
 
-        buttons = QHBoxLayout()
-        save = primary_button("حفظ العقد")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        # تحذير التأمين: لا يمنع، لكنه لا يُخفي. تأجير سيارة بلا تأمين ساري
+        # مسؤولية قانونية على المكتب، والقرار قراره لا قرار البرنامج.
+        self.insurance_warning = QLabel("")
+        self.insurance_warning.setWordWrap(True)
+        self.insurance_warning.setStyleSheet(
+            "background: #fee2e2; color: #b91c1c; border-radius: 8px; padding: 8px;"
+        )
+        self.insurance_warning.setVisible(False)
+        self.add_widget(self.insurance_warning)
+
+        self.add_buttons(save_text="حفظ العقد", on_save=self._save)
 
         # التجديد: نفس العميل ونفس السيارة، ويبدأ من انتهاء العقد السابق
         if preset:
@@ -135,11 +165,10 @@ class NewContractDialog(QDialog):
             self._on_vehicle_changed()
         else:
             self.quote_label.setText("⚠ لا توجد سيارات قابلة للحجز (كلّها في الصيانة).")
-            save.setEnabled(False)
+            if self.save_button is not None:
+                self.save_button.setEnabled(False)
 
-        if not self.customer.count():
-            self.quote_label.setText("⚠ لا يوجد عملاء مسجَّلون. أضف عميلاً أولاً.")
-            save.setEnabled(False)
+        # لا منع حين لا يوجد عملاء: اسم يُكتب في الحقل يصير عميلاً
 
     def _apply_preset(self, preset):
         for widget, key in ((self.customer, "customer_id"), (self.vehicle, "vehicle_id")):
@@ -164,7 +193,26 @@ class NewContractDialog(QDialog):
         self._vehicle = vehicles_repo.get(vehicle_id) if vehicle_id else None
         if self._vehicle:
             self.odometer.setValue(int(self._vehicle["odometer"] or 0))
+        self._check_insurance()
         self._recalculate()
+
+    def _check_insurance(self):
+        """يُظهر تحذيراً إن كان تأمين السيارة منتهياً — ولا يمنع الحفظ."""
+        self._insurance_alert = None
+        if self._vehicle is None:
+            self.insurance_warning.setVisible(False)
+            return
+
+        self._insurance_alert = alerts.vehicle_insurance_state(self._vehicle)
+        if self._insurance_alert is None:
+            self.insurance_warning.setVisible(False)
+            return
+
+        self.insurance_warning.setText(
+            "⚠ %s\nتأجير سيارة بلا تأمين ساري مسؤولية على المكتب."
+            % fix_dates(self._insurance_alert.message)
+        )
+        self.insurance_warning.setVisible(True)
 
     def _recalculate(self):
         if self._vehicle is None:
@@ -201,14 +249,67 @@ class NewContractDialog(QDialog):
             )
         )
 
+    def _resolve_customer(self):
+        """يُرجع معرّف العميل، ويُنشئه من الاسم المكتوب إن كان جديداً.
+
+        الترتيب مقصود: اختيارٌ من القائمة أولاً، فإن كتب الموظّف نصّاً حاولنا
+        مطابقته باسم قائم (فلا يتكرّر العميل لأن الموظّف كتب اسمه بدل اختياره)،
+        وإلّا أنشأناه بعد تأكيد صريح.
+        """
+        chosen = self.customer.currentData()
+        typed = self.customer.currentText().strip()
+
+        if chosen is not None and self.customer.currentText() == self.customer.itemText(
+            self.customer.currentIndex()
+        ):
+            return chosen
+
+        if not typed:
+            show_error(self, "اكتب اسم العميل أو اختره من القائمة.")
+            return None
+
+        index = self.customer.findText(typed, Qt.MatchFlag.MatchFixedString)
+        if index >= 0:
+            return self.customer.itemData(index)
+
+        # اسم مطابق لعميل مسجَّل ولو اختلفت صياغة السطر المعروض
+        for existing in customers_repo.search(term=typed, limit=20):
+            if (existing["full_name"] or "").strip() == typed:
+                return existing["id"]
+
+        if not confirm(
+            self,
+            "لا يوجد عميل بهذا الاسم.\n"
+            "سيُسجَّل عميل جديد باسم «%s» ببيانات ناقصة، تُكملها لاحقاً من شاشة"
+            " العملاء. متابعة؟" % typed,
+        ):
+            return None
+
+        try:
+            return customers_repo.create({"full_name": typed})
+        except Exception as error:
+            show_error(self, error)
+            return None
+
     def _save(self):
-        if self.customer.currentData() is None or self.vehicle.currentData() is None:
-            show_error(self, "اختر العميل والسيارة.")
+        if self.vehicle.currentData() is None:
+            show_error(self, "اختر السيارة.")
+            return
+
+        customer_id = self._resolve_customer()
+        if customer_id is None:
+            return
+
+        if self._insurance_alert is not None and not confirm(
+            self,
+            "%s\nهل تريد إتمام العقد رغم ذلك؟" % self._insurance_alert.message,
+            title="تأمين منتهٍ",
+        ):
             return
 
         try:
             contract_id, number = rental_service.open_contract(
-                customer_id=self.customer.currentData(),
+                customer_id=customer_id,
                 vehicle_id=self.vehicle.currentData(),
                 start_date=self.start_date.date().toString("yyyy-MM-dd"),
                 expected_end_date=self.end_date.date().toString("yyyy-MM-dd"),
@@ -220,6 +321,12 @@ class NewContractDialog(QDialog):
                 pickup_location=self.pickup.text().strip() or None,
                 notes=self.notes.toPlainText().strip() or None,
                 start_odometer=self.odometer.value(),
+                guarantor={
+                    "name": self.guarantor_name.text().strip(),
+                    "nationality": self.guarantor_nationality.text().strip(),
+                    "passport": self.guarantor_passport.text().strip(),
+                    "address": self.guarantor_address.text().strip(),
+                },
             )
         except Exception as error:
             show_error(self, error)
@@ -230,20 +337,14 @@ class NewContractDialog(QDialog):
         self.accept()
 
 
-class CloseContractDialog(QDialog):
+class CloseContractDialog(FormDialog):
     """حوار إغلاق عقد وإعادة حساب القيمة بالمدّة الفعلية."""
-
     def __init__(self, contract, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, title="إنهاء العقد %s" % contract["contract_number"], width=520)
         self._contract = contract
 
-        self.setWindowTitle("إنهاء العقد %s" % contract["contract_number"])
-        self.setMinimumWidth(520)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        form = self.form
 
         self.end_date = date_field()
         self.end_date.dateChanged.connect(self._preview)
@@ -274,23 +375,13 @@ class CloseContractDialog(QDialog):
         form.addRow("قراءة العدّاد عند التسليم", self.odometer)
         form.addRow("مكان التسليم", self.return_location)
         form.addRow("ملاحظة", self.note)
-        layout.addLayout(form)
-
         self.preview = QLabel("")
         self.preview.setWordWrap(True)
         card = Card(margins=(14, 12, 14, 12))
         card.body.addWidget(self.preview)
-        layout.addWidget(card)
+        self.add_widget(card)
 
-        buttons = QHBoxLayout()
-        save = primary_button("إغلاق العقد")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        self.add_buttons(save_text="إغلاق العقد", on_save=self._save)
 
         self._preview()
 
@@ -360,7 +451,7 @@ class CloseContractDialog(QDialog):
         self.accept()
 
 
-class EditContractDialog(QDialog):
+class EditContractDialog(FormDialog):
     """حوار تعديل عقد مفتوح: التواريخ والسيارة والخصم والرسوم.
 
     تبديل السيارة مسموح ومقصود: يحدث في المكاتب أن تتعطّل السيارة المتَّفق عليها
@@ -368,16 +459,13 @@ class EditContractDialog(QDialog):
     """
 
     def __init__(self, contract, parent=None):
-        super().__init__(parent)
+        super().__init__(
+            parent,
+            title="تعديل العقد %s" % contract["contract_number"],
+            width=560,
+        )
         self._contract = contract
-
-        self.setWindowTitle("تعديل العقد %s" % contract["contract_number"])
-        self.setMinimumWidth(560)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        form = self.form
 
         self.vehicle = combo(
             [(row["id"], _vehicle_label(row)) for row in vehicles_repo.list_bookable()]
@@ -423,23 +511,13 @@ class EditContractDialog(QDialog):
         form.addRow("رسوم إضافية", self.extra)
         form.addRow("مكان الاستلام", self.pickup)
         form.addRow("ملاحظات", self.notes)
-        layout.addLayout(form)
-
         self.preview_label = QLabel("")
         self.preview_label.setWordWrap(True)
         card = Card(margins=(14, 12, 14, 12))
         card.body.addWidget(self.preview_label)
-        layout.addWidget(card)
+        self.add_widget(card)
 
-        buttons = QHBoxLayout()
-        save = primary_button("حفظ التعديل")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        self.add_buttons(save_text="حفظ التعديل", on_save=self._save)
 
         self._preview()
 
@@ -506,21 +584,20 @@ class EditContractDialog(QDialog):
         self.accept()
 
 
-class PaymentDialog(QDialog):
+class PaymentDialog(FormDialog):
     """حوار تسجيل دفعة على عقد."""
 
     def __init__(self, contract, parent=None):
-        super().__init__(parent)
+        super().__init__(
+            parent,
+            title="تسجيل دفعة — %s" % contract["contract_number"],
+            width=440,
+        )
         self._contract = contract
-
-        self.setWindowTitle("تسجيل دفعة — %s" % contract["contract_number"])
-        self.setMinimumWidth(440)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         symbol = settings_repo.symbol_of(contract["currency_code"])
         remaining = int(contract["balance_due"])
 
-        layout = QVBoxLayout(self)
         info = QLabel(
             "إجمالي العقد: %s\nالمدفوع: %s\nالمتبقّي: %s"
             % (
@@ -530,11 +607,9 @@ class PaymentDialog(QDialog):
             )
         )
         info.setWordWrap(True)
-        layout.addWidget(info)
+        self.body.insertWidget(0, info)
 
-        form = QFormLayout()
-        form.setSpacing(10)
-
+        form = self.form
         self.amount = money_field()
         self.amount.setMaximum(float(money.to_major(max(remaining, 0))))
         self.amount.setValue(float(money.to_major(max(remaining, 0))))
@@ -547,21 +622,11 @@ class PaymentDialog(QDialog):
         form.addRow("طريقة الدفع", self.method)
         form.addRow("رقم المرجع / الإيصال", self.reference)
         form.addRow("ملاحظة", self.note)
-        layout.addLayout(form)
-
-        buttons = QHBoxLayout()
-        save = primary_button("تسجيل الدفعة")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        self.add_buttons(save_text="تسجيل الدفعة", on_save=self._save)
 
         if remaining <= 0:
             info.setText(info.text() + "\n\nالعقد مدفوع بالكامل.")
-            save.setEnabled(False)
+            self.save_button.setEnabled(False)
 
     def _save(self):
         try:
@@ -856,8 +921,6 @@ class ContractsPage(QWidget):
             QDate.fromString(contract["expected_end_date"], "yyyy-MM-dd").addDays(1)
         )
         form.addRow("تاريخ الانتهاء الجديد", new_date)
-        layout.addLayout(form)
-
         buttons = QHBoxLayout()
         save = primary_button("تمديد")
         save.clicked.connect(dialog.accept)

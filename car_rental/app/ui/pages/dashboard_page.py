@@ -9,9 +9,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ... import config
-from ...core import money
-from ...repositories import contracts_repo, settings_repo
-from ...services import reporting
+from ...core import arabic, features, money
+from ...repositories import contracts_repo, customers_repo, settings_repo
+from ...services import alerts, reporting
 from ..widgets.common import (
     Card, DataTable, PageHeader, StatCard, search_box, show_error,
 )
@@ -38,6 +38,15 @@ class DashboardPage(QWidget):
         self.header.actions.addWidget(self.quick_search)
 
         layout.addWidget(self.header)
+
+        # --- شريط التنبيهات ---
+        # يعلو البطاقات عمداً: وثيقة تأمين منتهية أهمّ ممّا في الخزنة اليوم،
+        # ولا يُرى إلّا إن كان هناك ما يُقال.
+        self.alert_bar = QLabel("")
+        self.alert_bar.setObjectName("alertBar")
+        self.alert_bar.setWordWrap(True)
+        self.alert_bar.setVisible(False)
+        layout.addWidget(self.alert_bar)
 
         # --- بطاقات الحالة ---
         cards = QGridLayout()
@@ -169,9 +178,49 @@ class DashboardPage(QWidget):
 
             self.due_table.fill(contracts_repo.due_today_or_overdue(), self._format)
             self.unpaid_table.fill(contracts_repo.unpaid()[:20], self._format)
+            self._refresh_alert_bar()
 
             self.header.set_subtitle(
                 "نظرة عامّة — فترة التقرير: %s إلى %s" % summary["period"]
             )
         except Exception as error:
             show_error(self, "تعذّر تحميل لوحة المعلومات: %s" % error)
+
+    def _refresh_alert_bar(self):
+        """شريط التنبيهات: وثائق منتهية وملفّات عملاء ناقصة، في سطر واحد.
+
+        يُبنى من مصدرين مختلفين عمداً ليبقى سطراً واحداً: صاحب المكتب يقرأ
+        سطراً ويتصرّف، ولا يقرأ ثلاثة شرائط متراكمة.
+        """
+        parts = []
+
+        if features.has_feature("alerts"):
+            try:
+                counts = alerts.summary()
+            except Exception:
+                counts = {"expired": 0, "soon": 0}
+
+            if counts["expired"]:
+                parts.append("⚠ %s منتهية (تأمين أو فحص أو رخصة)"
+                             % arabic.count(counts["expired"], "وثيقة واحدة",
+                                            "وثيقتان", "وثائق", "وثيقة"))
+            if counts["soon"]:
+                parts.append("%s توشك على الانتهاء"
+                             % arabic.count(counts["soon"], "وثيقة واحدة",
+                                            "وثيقتان", "وثائق", "وثيقة"))
+
+        try:
+            incomplete = sum(
+                1 for row in customers_repo.search(limit=2000)
+                if customers_repo.is_incomplete(row)
+            )
+        except Exception:
+            incomplete = 0
+
+        if incomplete:
+            parts.append("%s ببيانات ناقصة"
+                         % arabic.count(incomplete, "عميل واحد", "عميلان",
+                                        "عملاء", "عميلاً"))
+
+        self.alert_bar.setText("   ·   ".join(parts))
+        self.alert_bar.setVisible(bool(parts))

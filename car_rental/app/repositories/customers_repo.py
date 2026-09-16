@@ -90,19 +90,42 @@ def frequent(limit=20, min_contracts=2, conn=None):
     )
 
 
+# الحقول التي يكتمل بها ملفّ العميل. ناقصُها يعمل في المنظومة لكنه مُعلَّم.
+REQUIRED_FOR_COMPLETE = {
+    "phone": "رقم الهاتف",
+    "national_id": "رقم الجواز أو الرقم الوطني",
+    "license_number": "رقم رخصة القيادة",
+}
+
+
+def missing_fields(row):
+    """أسماء الحقول الناقصة في ملفّ عميل، بالعربية وبترتيب ثابت."""
+    return [label for key, label in REQUIRED_FOR_COMPLETE.items()
+            if not (row[key] if key in row.keys() else None)]
+
+
+def is_incomplete(row):
+    """هل ملفّ العميل ناقص؟ محسوبة لا مخزَّنة، فلا تتناقض مع البيانات."""
+    return bool(missing_fields(row))
+
+
 def _validate(data, customer_id=None, conn=None):
+    """يتحقّق من الحدّ الأدنى فقط.
+
+    الاسم وحده إلزامي عمداً: المكتب يستقبل زبوناً واقفاً أمامه فيكتب اسمه ويفتح
+    العقد، ثم يُكمل وثائقه. ومنعُه من العمل حتى يُملأ كل حقل يدفعه إلى كتابة
+    أرقام مُختلَقة — وبيانات كاذبة أسوأ من بيانات ناقصة معلومة النقص.
+    """
     if not (data.get("full_name") or "").strip():
         raise ValueError("اسم العميل مطلوب.")
-    if not (data.get("phone") or "").strip():
-        raise ValueError("رقم الهاتف مطلوب.")
-    if not (data.get("national_id") or "").strip():
-        raise ValueError("رقم الجواز أو الرقم الوطني مطلوب.")
-    if not (data.get("license_number") or "").strip():
-        raise ValueError("رقم رخصة القيادة مطلوب.")
+
+    national_id = (data.get("national_id") or "").strip()
+    if not national_id:
+        return
 
     duplicate = db.query_one(
         "SELECT id FROM customers WHERE national_id = ? AND id IS NOT ?",
-        (data["national_id"].strip(), customer_id),
+        (national_id, customer_id),
         conn=conn,
     )
     if duplicate:

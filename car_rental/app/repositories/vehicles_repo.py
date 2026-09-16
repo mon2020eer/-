@@ -16,6 +16,10 @@ _FIELDS = (
     "currency_code",
     "odometer",
     "chassis_number",
+    "insurance_company",
+    "insurance_policy_no",
+    "insurance_expiry",
+    "inspection_expiry",
     "notes",
 )
 

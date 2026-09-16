@@ -43,7 +43,7 @@ FEATURES = {
         "dashboard", "local_backup", "settings",
         "reports", "export", "cloud_backup", "maintenance", "violations",
         "hourly_billing", "multi_currency", "multi_user", "audit_log",
-        "alerts",
+        "alerts", "contract_template",
     },
     # وضع القفل: قراءة وطباعة ونسخ احتياطي فقط — لا إنشاء ولا تعديل
     TIER_LOCKED: {
@@ -52,6 +52,8 @@ FEATURES = {
 }
 
 FEATURE_LABELS = {
+    "contract_template": "الطباعة على نموذج عقد المكتب",
+    "alerts": "تنبيهات التأمين والفحص والرخص",
     "reports": "التقارير المالية",
     "export": "تصدير البيانات",
     "cloud_backup": "النسخ الاحتياطي على Google Drive",
@@ -61,7 +63,6 @@ FEATURE_LABELS = {
     "multi_currency": "تعدّد العملات",
     "multi_user": "تعدّد المستخدمين",
     "audit_log": "سجلّ التدقيق",
-    "alerts": "التنبيهات",
     "contracts": "إدارة العقود",
     "vehicles": "إدارة السيارات",
     "customers": "إدارة العملاء",

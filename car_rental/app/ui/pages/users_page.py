@@ -11,24 +11,19 @@ from ... import config
 from ...core import audit, session
 from ...repositories import users_repo
 from ..widgets.common import (
-    Card, DataTable, PageHeader, combo, confirm, primary_button, show_error, show_info,
+    Card, DataTable, FormDialog, PageHeader, combo, confirm,
+    primary_button, show_error, show_info,
 )
 
 
-class UserDialog(QDialog):
+class UserDialog(FormDialog):
     """حوار إضافة مستخدم أو تعديل بياناته."""
-
     def __init__(self, parent=None, user_row=None):
-        super().__init__(parent)
+        super().__init__(parent, title="تعديل مستخدم" if user_row else "إضافة مستخدم جديد", width=460)
         self._user_row = user_row
 
-        self.setWindowTitle("تعديل مستخدم" if user_row else "إضافة مستخدم جديد")
-        self.setMinimumWidth(460)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        form = self.form
 
         self.username = QLineEdit()
         self.full_name = QLineEdit()
@@ -47,25 +42,15 @@ class UserDialog(QDialog):
         else:
             form.addRow("حالة الحساب", self.active)
 
-        layout.addLayout(form)
-
         hint = QLabel(
             "«مدير»: صلاحية كاملة تشمل التقارير المالية وإدارة المستخدمين والنسخ الاحتياطي.\n"
             "«موظّف»: العقود والعملاء والسيارات والدفعات فقط."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self.add_widget(hint)
 
-        buttons = QHBoxLayout()
-        save = primary_button("حفظ")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        self.add_buttons(save_text="حفظ", on_save=self._save)
 
         if user_row:
             self._load(user_row)
@@ -237,8 +222,6 @@ class UsersPage(QWidget):
         second.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("كلمة المرور الجديدة", first)
         form.addRow("تأكيد كلمة المرور", second)
-        layout.addLayout(form)
-
         buttons = QHBoxLayout()
         save = primary_button("حفظ")
         save.clicked.connect(dialog.accept)

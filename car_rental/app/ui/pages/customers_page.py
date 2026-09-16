@@ -3,32 +3,29 @@
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
 from ...core import money, session
 from ...repositories import customers_repo, settings_repo
 from ..widgets.common import (
-    Card, DataTable, PageHeader, confirm, date_field, fix_dates, primary_button,
-    search_box, show_error, show_info,
+    Card, DataTable, FormDialog, PageHeader, confirm, date_field,
+    fix_dates, primary_button, search_box, show_error, show_info,
 )
 
 
-class CustomerDialog(QDialog):
+class CustomerDialog(FormDialog):
     """حوار إضافة عميل أو تعديل بياناته."""
 
     def __init__(self, parent=None, customer=None):
-        super().__init__(parent)
+        super().__init__(
+            parent,
+            title="تعديل بيانات عميل" if customer else "إضافة عميل جديد",
+            width=520,
+        )
         self._customer = customer
-
-        self.setWindowTitle("تعديل بيانات عميل" if customer else "إضافة عميل جديد")
-        self.setMinimumWidth(520)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        form = self.form
 
         self.full_name = QLineEdit()
         self.phone = QLineEdit()
@@ -42,26 +39,24 @@ class CustomerDialog(QDialog):
         self.blacklisted = QCheckBox("إدراج العميل في القائمة السوداء (يمنع التعاقد معه)")
 
         form.addRow("الاسم الكامل *", self.full_name)
-        form.addRow("رقم الهاتف *", self.phone)
-        form.addRow("رقم الجواز / الرقم الوطني *", self.national_id)
-        form.addRow("رقم رخصة القيادة *", self.license_number)
+        form.addRow("رقم الهاتف", self.phone)
+        form.addRow("رقم الجواز / الرقم الوطني", self.national_id)
+        form.addRow("رقم رخصة القيادة", self.license_number)
         form.addRow("تاريخ انتهاء الرخصة", self.license_expiry)
         form.addRow("الجنسية", self.nationality)
         form.addRow("العنوان", self.address)
         form.addRow("ملاحظات", self.notes)
         form.addRow("", self.blacklisted)
 
-        layout.addLayout(form)
+        hint = QLabel(
+            "الاسم وحده إلزامي. ما بقي يمكن إكماله لاحقاً، ويظهر العميل حتى "
+            "تُكمله بشارة «بيانات ناقصة» في جدول العملاء."
+        )
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        self.add_widget(hint)
 
-        buttons = QHBoxLayout()
-        save = primary_button("حفظ")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        self.add_buttons(save_text="حفظ", on_save=self._save)
 
         if customer:
             self._load(customer)
@@ -83,9 +78,9 @@ class CustomerDialog(QDialog):
     def data(self):
         return {
             "full_name": self.full_name.text().strip(),
-            "phone": self.phone.text().strip(),
-            "national_id": self.national_id.text().strip(),
-            "license_number": self.license_number.text().strip(),
+            "phone": self.phone.text().strip() or None,
+            "national_id": self.national_id.text().strip() or None,
+            "license_number": self.license_number.text().strip() or None,
             "license_expiry": self.license_expiry.date().toString("yyyy-MM-dd"),
             "nationality": self.nationality.text().strip() or None,
             "address": self.address.text().strip() or None,
@@ -127,9 +122,16 @@ class CustomersPage(QWidget):
         )
         self.frequent_toggle.stateChanged.connect(self.refresh)
 
+        self.incomplete_toggle = QCheckBox("الناقصة بياناتهم فقط")
+        self.incomplete_toggle.setToolTip(
+            "العملاء الذين سُجّلوا باسمهم وحده ولم تُكمل وثائقهم بعد"
+        )
+        self.incomplete_toggle.stateChanged.connect(self.refresh)
+
         self.search = search_box("بحث بالاسم أو الهاتف أو رقم الجواز…")
         self.search.textChanged.connect(self.refresh)
         header.actions.addWidget(self.frequent_toggle)
+        header.actions.addWidget(self.incomplete_toggle)
         header.actions.addWidget(self.search)
 
         add_button = primary_button("+ عميل جديد")
@@ -150,6 +152,7 @@ class CustomersPage(QWidget):
                 ("national_id", "رقم الجواز/الوطني"),
                 ("contracts_count", "عدد العقود"),
                 ("last_contract_date", "آخر تعامل"),
+                ("completeness", "الملفّ"),
             ],
             stretch_column=0,
         )
@@ -316,6 +319,8 @@ class CustomersPage(QWidget):
                 self.search.text(),
                 order_by="frequent" if self.frequent_toggle.isChecked() else "name",
             )
+            if self.incomplete_toggle.isChecked():
+                rows = [row for row in rows if customers_repo.is_incomplete(row)]
             self.table.fill(rows, self._format_customer)
         except Exception as error:
             show_error(self, error)
@@ -325,4 +330,11 @@ class CustomersPage(QWidget):
             return row["last_contract_date"] or "—"
         if key == "contracts_count":
             return row["contracts_count"] or 0
-        return row[key] if key in row.keys() else ""
+        if key == "completeness":
+            missing = customers_repo.missing_fields(row)
+            if not missing:
+                return "مكتمل"
+            # تسمية ما ينقص لا مجرّد «ناقص»: الموظّف يعرف ماذا يطلب من العميل
+            return "ناقص: " + "، ".join(missing)
+        value = row[key] if key in row.keys() else ""
+        return "—" if value in (None, "") else value

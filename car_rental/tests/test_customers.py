@@ -3,6 +3,8 @@
 
 import datetime
 
+import pytest
+
 from app.repositories import customers_repo, vehicles_repo
 from app.services import rental_service
 
@@ -106,3 +108,87 @@ def test_cancelled_contracts_do_not_count(conn, admin):
 
     row = customers_repo.search("عميل ألغى", conn=conn)[0]
     assert row["contracts_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# العميل السريع وبياناته الناقصة
+# ---------------------------------------------------------------------------
+def test_customer_can_be_created_with_a_name_only(conn, admin):
+    """المكتب يستقبل زبوناً واقفاً أمامه فيكتب اسمه ويمضي."""
+    customer_id = customers_repo.create({"full_name": "زبون عابر"}, conn=conn)
+
+    row = customers_repo.get(customer_id, conn=conn)
+    assert row["full_name"] == "زبون عابر"
+    assert row["phone"] is None
+    assert row["national_id"] is None
+
+
+def test_a_name_is_still_required(conn, admin):
+    with pytest.raises(ValueError) as error:
+        customers_repo.create({"phone": "0912345678"}, conn=conn)
+    assert "اسم" in str(error.value)
+
+
+def test_incomplete_names_exactly_what_is_missing(conn, admin):
+    partial = customers_repo.get(
+        customers_repo.create({"full_name": "ناقص", "phone": "0911"}, conn=conn),
+        conn=conn,
+    )
+    full = customers_repo.get(
+        customers_repo.create(
+            {"full_name": "مكتمل", "phone": "0912", "national_id": "N-1",
+             "license_number": "LC-1"},
+            conn=conn,
+        ),
+        conn=conn,
+    )
+
+    assert customers_repo.is_incomplete(partial)
+    assert customers_repo.missing_fields(partial) == [
+        "رقم الجواز أو الرقم الوطني", "رقم رخصة القيادة",
+    ]
+
+    assert not customers_repo.is_incomplete(full)
+    assert customers_repo.missing_fields(full) == []
+
+
+def test_two_incomplete_customers_do_not_collide(conn, admin):
+    """رقمان وطنيان فارغان ليسا تكراراً — وإلّا تعذّر تسجيل أكثر من زبون عابر."""
+    customers_repo.create({"full_name": "أول"}, conn=conn)
+    customers_repo.create({"full_name": "ثانٍ"}, conn=conn)
+
+    names = {row["full_name"] for row in customers_repo.search(conn=conn)}
+    assert {"أول", "ثانٍ"} <= names
+
+
+def test_duplicate_national_id_is_still_refused(conn, admin):
+    """تخفيف الإلزام لا يعني تخفيف التفرّد: ملفّان لعميل واحد خطأ محاسبي."""
+    customers_repo.create(
+        {"full_name": "أوّل", "national_id": "SAME-1"}, conn=conn
+    )
+    with pytest.raises(ValueError):
+        customers_repo.create(
+            {"full_name": "ثانٍ", "national_id": "SAME-1"}, conn=conn
+        )
+
+
+def test_incomplete_customer_can_still_rent(conn, admin, sample_vehicle):
+    """العميل الناقص يعمل في المنظومة كاملاً — النقص يُعلَّم ولا يُعطّل."""
+    import datetime
+
+    from app.services import rental_service
+
+    customer_id = customers_repo.create({"full_name": "زبون عابر"}, conn=conn)
+    today = datetime.date.today()
+
+    contract_id, number = rental_service.open_contract(
+        customer_id, sample_vehicle, today.isoformat(),
+        (today + datetime.timedelta(days=2)).isoformat(), conn=conn,
+    )
+    assert contract_id and number
+
+
+def test_incomplete_customer_does_not_break_search_rows(conn, admin):
+    customers_repo.create({"full_name": "زبون عابر"}, conn=conn)
+    rows = customers_repo.search(conn=conn)
+    assert any(customers_repo.is_incomplete(row) for row in rows)

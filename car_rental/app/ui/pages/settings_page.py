@@ -2,16 +2,17 @@
 """صفحة الإعدادات: بيانات المكتب، والعملات وأسعار الصرف، وخيارات النسخ."""
 
 from PyQt6.QtWidgets import (
-    QCheckBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ... import config
-from ...core import money
+from ...core import features, money
 from ...repositories import settings_repo
+from ...services import pdf_template
 from ..widgets.common import (
-    Card, DataTable, PageHeader, combo, money_field, primary_button, show_error,
-    show_info,
+    Card, DataTable, PageHeader, combo, confirm, money_field, primary_button,
+    show_error, show_info,
 )
 
 
@@ -65,6 +66,19 @@ class SettingsPage(QWidget):
         backup_form.addRow("", self.auto_daily)
         backup_form.addRow("عدد النسخ المحفوظة في Drive", self.retention)
 
+        alerts_title = QLabel("التنبيهات")
+        alerts_title.setObjectName("sectionTitle")
+
+        alerts_form = QFormLayout()
+        alerts_form.setSpacing(10)
+        self.alert_days = QSpinBox()
+        self.alert_days.setRange(1, 365)
+        self.alert_days.setSuffix(" يوماً")
+        self.alert_days.setToolTip(
+            "كم يوماً قبل انتهاء التأمين أو الفحص أو الرخصة يبدأ التنبيه"
+        )
+        alerts_form.addRow("التنبيه قبل الانتهاء بـ", self.alert_days)
+
         save_button = primary_button("حفظ الإعدادات")
         save_button.clicked.connect(self._save)
 
@@ -73,9 +87,14 @@ class SettingsPage(QWidget):
         office_card.body.addSpacing(10)
         office_card.body.addWidget(backup_title)
         office_card.body.addLayout(backup_form)
+        office_card.body.addSpacing(10)
+        office_card.body.addWidget(alerts_title)
+        office_card.body.addLayout(alerts_form)
         office_card.body.addSpacing(6)
         office_card.body.addWidget(save_button)
         office_card.body.addStretch(1)
+
+        office_card.body.addWidget(self._template_card())
 
         body.addWidget(office_card, 1)
 
@@ -150,6 +169,115 @@ class SettingsPage(QWidget):
             return str(row["updated_at"])[:16]
         return row[key] if key in row.keys() else ""
 
+    # ------------------------------------------------------------------
+    # نموذج عقد المكتب
+    # ------------------------------------------------------------------
+    def _template_card(self):
+        """بطاقة رفع نموذج العقد وتعيين مواضع حقوله."""
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(8)
+
+        title = QLabel("نموذج عقد المكتب")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+
+        self.template_status = QLabel("")
+        self.template_status.setObjectName("hint")
+        self.template_status.setWordWrap(True)
+        layout.addWidget(self.template_status)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+
+        self.upload_template = QPushButton("رفع نموذج PDF")
+        self.upload_template.clicked.connect(self._upload_template)
+        buttons.addWidget(self.upload_template)
+
+        self.map_template = QPushButton("تحديد مواضع الحقول")
+        self.map_template.clicked.connect(self._open_template_editor)
+        buttons.addWidget(self.map_template)
+
+        self.drop_template = QPushButton("حذف النموذج")
+        self.drop_template.clicked.connect(self._remove_template)
+        buttons.addWidget(self.drop_template)
+
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        return box
+
+    def _refresh_template_card(self):
+        allowed = features.has_feature("contract_template")
+        for button in (self.upload_template, self.map_template, self.drop_template):
+            button.setEnabled(allowed)
+
+        if not allowed:
+            self.template_status.setText(
+                "الطباعة على نموذج المكتب متاحة في النسخة المتقدّمة."
+            )
+            return
+
+        if not pdf_template.has_template():
+            self.template_status.setText(
+                "لم يُرفع نموذج بعد — يُطبع عقد المنظومة المولَّد.\n"
+                "ارفع ملف عقدك PDF ليُطبع على ورقتك أنت."
+            )
+            return
+
+        count = len(pdf_template.load_mapping())
+        if count:
+            self.template_status.setText(
+                "النموذج مرفوع، وعُيّن موضع %d حقلاً — الطباعة تخرج على ورقتك." % count
+            )
+        else:
+            self.template_status.setText(
+                "⚠ النموذج مرفوع لكن لم تُحدَّد مواضع حقوله بعد،"
+                " فما زال يُطبع عقد المنظومة. اضغط «تحديد مواضع الحقول»."
+            )
+
+    def _upload_template(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "اختر ملف نموذج العقد", "", "ملفات PDF (*.pdf)"
+        )
+        if not path:
+            return
+
+        try:
+            pdf_template.install(path)
+        except Exception as error:
+            show_error(self, error)
+            return
+
+        self._refresh_template_card()
+        if confirm(self, "رُفع النموذج. هل تفتح محرّر مواضع الحقول الآن؟"):
+            self._open_template_editor()
+
+    def _open_template_editor(self):
+        if not pdf_template.has_template():
+            show_error(self, "ارفع نموذج العقد أولاً.")
+            return
+
+        from .template_editor import TemplateEditor
+
+        editor = TemplateEditor(self)
+        editor.exec()
+        self._refresh_template_card()
+
+    def _remove_template(self):
+        if not pdf_template.has_template():
+            return
+        if not confirm(self, "سيُحذف النموذج ومواضع حقوله، ويعود الطبع إلى عقد"
+                             " المنظومة المولَّد. متابعة؟"):
+            return
+        try:
+            pdf_template.remove()
+        except Exception as error:
+            show_error(self, error)
+            return
+        self._refresh_template_card()
+
+    # ------------------------------------------------------------------
     def _save(self):
         try:
             settings_repo.set_many({
@@ -159,6 +287,7 @@ class SettingsPage(QWidget):
                 "backup_enabled": "1" if self.backup_enabled.isChecked() else "0",
                 "auto_backup_daily": "1" if self.auto_daily.isChecked() else "0",
                 "backup_retention": str(self.retention.value()),
+                "alert_days_before": str(self.alert_days.value()),
             })
         except Exception as error:
             show_error(self, error)
@@ -198,6 +327,8 @@ class SettingsPage(QWidget):
             self.backup_enabled.setChecked(values.get("backup_enabled", "1") == "1")
             self.auto_daily.setChecked(values.get("auto_backup_daily", "1") == "1")
             self.retention.setValue(int(values.get("backup_retention") or 30))
+            self.alert_days.setValue(int(values.get("alert_days_before") or 30))
+            self._refresh_template_card()
 
             currencies = settings_repo.list_currencies()
             self.currency_table.fill(currencies, self._format_currency)

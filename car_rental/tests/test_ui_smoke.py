@@ -92,8 +92,16 @@ def test_main_window_builds_for_admin(gui, admin):
     window.show()
     gui.processEvents()
 
-    # المدير في النسخة المتقدّمة يرى كل الصفحات العشر
-    assert window.stack.count() == 10
+    # المدير في النسخة المتقدّمة يرى كل الصفحات. يُفحص بالأنواع لا بعدد
+    # مكتوب: عدٌّ ثابت يُكسر مع كل صفحة جديدة بلا أن يكشف عطباً.
+    from app.ui.pages.alerts_page import AlertsPage
+    from app.ui.pages.backup_page import BackupPage
+    from app.ui.pages.reports_page import ReportsPage
+    from app.ui.pages.settings_page import SettingsPage
+
+    pages = {type(window.stack.widget(i)) for i in range(window.stack.count())}
+    for page_class in (AlertsPage, BackupPage, ReportsPage, SettingsPage):
+        assert page_class in pages, page_class.__name__
     window.close()
 
 
@@ -101,6 +109,7 @@ def test_basic_tier_hides_premium_pages(gui, conn, admin):
     """النسخة الأساسية لا تبني صفحات النسخة المتقدّمة أصلاً."""
     from app.core import features
     from app.ui.main_window import MainWindow
+    from app.ui.pages.alerts_page import AlertsPage
     from app.ui.pages.backup_page import BackupPage
     from app.ui.pages.maintenance_page import MaintenancePage
     from app.ui.pages.reports_page import ReportsPage
@@ -115,7 +124,7 @@ def test_basic_tier_hides_premium_pages(gui, conn, admin):
         assert ReportsPage not in pages
         assert BackupPage not in pages
         assert MaintenancePage not in pages
-        assert window.stack.count() < 10
+        assert AlertsPage not in pages          # التنبيهات ميزة متقدّمة
         window.close()
     finally:
         features.set_tier(features.TIER_PRO)
@@ -156,9 +165,9 @@ def test_staff_sees_fewer_pages(gui, conn, admin):
     window.show()
     gui.processEvents()
 
-    assert window.stack.count() == 5
     pages = [type(window.stack.widget(i)) for i in range(window.stack.count())]
-    assert ReportsPage not in pages
+    assert ReportsPage not in pages         # التقارير للمدير وحده
+    assert len(pages) < 11                  # أقلّ ممّا يراه المدير
 
     window.close()
     session.login(admin)
@@ -355,3 +364,171 @@ def test_csv_export_is_excel_friendly(gui, conn, tmp_path):
     raw = path.read_bytes()
     assert raw[:3] == b"\xef\xbb\xbf"      # علامة BOM يحتاجها Excel للعربية
     assert "رقم العقد" in raw.decode("utf-8-sig")
+
+
+# ---------------------------------------------------------------------------
+# ارتفاع الحوارات: العطب الذي منع الحفظ على شاشة محمول
+# ---------------------------------------------------------------------------
+def _dialog_cases(conn):
+    """كل حوارات النماذج مع ما تحتاجه من بيانات."""
+    from app.repositories import contracts_repo
+    from app.ui.pages.contracts_page import (
+        CloseContractDialog, EditContractDialog, NewContractDialog, PaymentDialog,
+    )
+    from app.ui.pages.customers_page import CustomerDialog
+    from app.ui.pages.maintenance_page import MaintenanceDialog, ViolationDialog
+    from app.ui.pages.users_page import UserDialog
+    from app.ui.pages.vehicles_page import VehicleDialog
+
+    contract = contracts_repo.search(status="open", limit=1, conn=conn)[0]
+    return [
+        ("سيارة جديدة", lambda: VehicleDialog()),
+        ("عميل جديد", lambda: CustomerDialog()),
+        ("عقد جديد", lambda: NewContractDialog()),
+        ("تعديل عقد", lambda: EditContractDialog(contract)),
+        ("إغلاق عقد", lambda: CloseContractDialog(contract)),
+        ("تسجيل دفعة", lambda: PaymentDialog(contract)),
+        ("صيانة", lambda: MaintenanceDialog()),
+        ("مخالفة", lambda: ViolationDialog()),
+        ("مستخدم", lambda: UserDialog()),
+    ]
+
+
+def test_every_dialog_fits_the_screen_with_its_save_button_visible(gui, conn):
+    """العطب الأصلي: حوار أطول من الشاشة يُخفي زرّ الحفظ بلا تمرير إليه.
+
+    الشرطان معاً هما ما يجعل الحوار صالحاً للاستعمال: أن يبقى ضمن الشاشة،
+    وأن يبقى زرّ الحفظ داخل حدوده لا تحتها.
+    """
+    from PyQt6.QtGui import QGuiApplication
+
+    available = QGuiApplication.primaryScreen().availableGeometry()
+
+    for label, build in _dialog_cases(conn):
+        dialog = build()
+        dialog.show()
+        gui.processEvents()
+
+        assert dialog.height() <= available.height(), (
+            "حوار «%s» أطول من الشاشة (%d > %d)"
+            % (label, dialog.height(), available.height())
+        )
+
+        assert dialog.save_button is not None, "حوار «%s» بلا زرّ حفظ" % label
+        button_bottom = dialog.save_button.mapTo(dialog, dialog.save_button.rect().bottomLeft()).y()
+        assert button_bottom <= dialog.height(), (
+            "زرّ حفظ حوار «%s» خارج حدوده" % label
+        )
+
+        dialog.close()
+
+
+def test_long_forms_scroll_instead_of_growing(gui, conn):
+    """حوار السيارة أطول نموذج في المنظومة: محتواه يُمرَّر ولا يمتدّ بلا حدّ."""
+    from PyQt6.QtWidgets import QScrollArea
+
+    from app.ui.pages.vehicles_page import VehicleDialog
+
+    dialog = VehicleDialog()
+    dialog.show()
+    gui.processEvents()
+
+    scrolls = dialog.findChildren(QScrollArea)
+    assert scrolls, "لا توجد منطقة تمرير في الحوار"
+    dialog.close()
+
+
+# ---------------------------------------------------------------------------
+# العميل السريع من حوار العقد
+# ---------------------------------------------------------------------------
+def test_contract_dialog_customer_field_is_typable(gui, conn):
+    from app.ui.pages.contracts_page import NewContractDialog
+
+    dialog = NewContractDialog()
+    gui.processEvents()
+
+    assert dialog.customer.isEditable(), "حقل العميل غير قابل للكتابة"
+    assert dialog.customer.completer() is not None
+    dialog.close()
+
+
+def test_contract_dialog_matches_an_existing_customer_by_name(gui, conn,
+                                                              sample_customer):
+    """كتابة اسم عميل مسجَّل تستعمله ولا تُنشئ نسخة ثانية منه."""
+    from app.repositories import customers_repo
+    from app.ui.pages.contracts_page import NewContractDialog
+
+    existing = customers_repo.get(sample_customer, conn=conn)
+
+    dialog = NewContractDialog()
+    dialog.customer.setCurrentText(existing["full_name"])
+    gui.processEvents()
+
+    assert dialog._resolve_customer() == sample_customer
+    dialog.close()
+
+
+def test_contract_dialog_shows_expired_insurance_warning(gui, conn):
+    """سيارة تأمينها منتهٍ تُنبّه صراحةً في الحوار."""
+    import datetime
+
+    from app.repositories import vehicles_repo
+    from app.ui.pages.contracts_page import NewContractDialog
+
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    vehicles_repo.create(
+        {
+            "brand": "نيسان", "model": "صني", "year": 2020, "plate_number": "8-88888",
+            "color": "فضّي", "daily_rate": 8000, "weekly_rate": 0,
+            "currency_code": "LYD", "insurance_expiry": yesterday,
+        },
+        conn=conn,
+    )
+
+    dialog = NewContractDialog()
+    dialog.show()
+    index = next(i for i in range(dialog.vehicle.count())
+                 if "8-88888" in dialog.vehicle.itemText(i))
+    dialog.vehicle.setCurrentIndex(index)
+    gui.processEvents()
+
+    assert dialog.insurance_warning.isVisible()
+    assert "تأمين" in dialog.insurance_warning.text()
+    dialog.close()
+
+
+def test_alerts_page_lists_expiring_documents(gui, conn):
+    import datetime
+
+    from app.repositories import vehicles_repo
+    from app.ui.pages.alerts_page import AlertsPage
+
+    soon = (datetime.date.today() + datetime.timedelta(days=3)).isoformat()
+    vehicles_repo.create(
+        {
+            "brand": "هيونداي", "model": "أكسنت", "year": 2021,
+            "plate_number": "6-66666", "color": "أحمر", "daily_rate": 9000,
+            "weekly_rate": 0, "currency_code": "LYD", "inspection_expiry": soon,
+        },
+        conn=conn,
+    )
+
+    page = AlertsPage()
+    page.refresh()
+    gui.processEvents()
+
+    assert page.table.model_.rowCount() >= 1
+    page.deleteLater()
+
+
+def test_plate_numbers_are_not_reversed_in_arabic_text():
+    """«5-12345» داخل فقرة عربية ينقلب إلى «12345-5» بلا علامة LRM.
+
+    ولوحةٌ مقلوبة في عقد أو في جدول تنبيهات خطأ حقيقي لا تشويه شكلي.
+    """
+    from app.ui.widgets.common import LRM, fix_dates
+
+    assert fix_dates("اللوحة 5-12345") == "اللوحة %s5-12345%s" % (LRM, LRM)
+    assert fix_dates("من 2026-09-01 إلى 2026-09-14").count(LRM) == 4
+    assert fix_dates("بلا أرقام") == "بلا أرقام"
+    assert fix_dates("") == ""

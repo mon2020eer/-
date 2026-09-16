@@ -8,11 +8,11 @@
 import re
 
 from PyQt6.QtCore import QDate, Qt, QTime
-from PyQt6.QtGui import QStandardItem, QStandardItemModel
+from PyQt6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDateEdit, QDoubleSpinBox, QFrame, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QTableView,
-    QTimeEdit, QVBoxLayout, QWidget,
+    QAbstractItemView, QComboBox, QDateEdit, QDialog, QDoubleSpinBox, QFormLayout,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QScrollArea, QTableView, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from ...core import money
@@ -23,7 +23,12 @@ from ...core import money
 # مقلوب خطأ حقيقي.
 LRM = "‎"
 
-_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?")
+# يلتقط كل مجموعة أرقام تفصلها شرطات: التواريخ «2026-09-01»، وأرقام اللوحات
+# «5-12345»، وأرقام الوثائق. كلّها تنقلب بصرياً في فقرة عربية لأن الشرطة محرف
+# محايد يأخذ اتجاه الفقرة — ولوحةٌ مقلوبة في عقد خطأ كخطأ التاريخ المقلوب.
+_LTR_RUN_PATTERN = re.compile(
+    r"\d+(?:-\d+)+(?:[ T]\d{2}:\d{2}(?::\d{2})?)?"
+)
 
 STATUS_BADGE_IDS = {
     "available": "badgeAvailable",
@@ -39,13 +44,14 @@ STATUS_BADGE_IDS = {
 
 
 def fix_dates(text):
-    """يحيط كل تاريخ في النص بعلامة LRM فيُعرض بترتيبه الصحيح.
+    """يحيط كل تاريخ أو رقم لوحة بعلامة LRM فيُعرض بترتيبه الصحيح.
 
     >>> fix_dates("من 2026-09-01 إلى 2026-09-14")   # يُعرض: من 2026-09-01 إلى 2026-09-14
+    >>> fix_dates("اللوحة 5-12345")                  # يُعرض: اللوحة 5-12345 لا 12345-5
     """
     if not text:
         return text
-    return _DATE_PATTERN.sub(lambda match: LRM + match.group(0) + LRM, str(text))
+    return _LTR_RUN_PATTERN.sub(lambda match: LRM + match.group(0) + LRM, str(text))
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +82,132 @@ def confirm(parent, message, title="تأكيد"):
     box.exec()
 
     return box.clickedButton() is yes
+
+
+# ---------------------------------------------------------------------------
+# حوارات النماذج
+# ---------------------------------------------------------------------------
+# نسبة من ارتفاع الشاشة المتاح لا يتجاوزها حوار مهما طال نموذجه.
+_MAX_HEIGHT_RATIO = 0.85
+
+
+class FormDialog(QDialog):
+    """حوار نموذج: محتوًى قابل للتمرير وصفّ أزرار مثبَّت أسفله.
+
+    وُجد لأن الحوارات كانت تضع نموذجها مباشرةً في تخطيط رأسي بلا حدّ لارتفاعه:
+    على شاشة محمول (٧٦٨ بكسل) يتجاوز حوار السيارة ارتفاع الشاشة، **فيسقط زرّ
+    الحفظ تحت حافّتها ولا يوجد ما يُمرَّر به إليه** — فلا يستطيع الموظّف حفظ
+    عقد إلّا بضغط Enter عن غير علم. وهذا يعطّل المنظومة لا يشوّهها.
+
+    الاستعمال:
+
+        class VehicleDialog(FormDialog):
+            def __init__(self, parent=None):
+                super().__init__(parent, title="إضافة سيارة", width=520)
+                self.form.addRow("الماركة", self.brand)   # يُمرَّر
+                self.add_buttons(save_text="حفظ", on_save=self._save)
+    """
+
+    def __init__(self, parent=None, title="", width=520):
+        super().__init__(parent)
+        if title:
+            self.setWindowTitle(title)
+        self.setMinimumWidth(width)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # التمرير الأفقي يعني نموذجاً أضيق من محتواه: يُمنع ليتّسع العرض بدله
+        self._scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
+        self._content = QWidget()
+        self.body = QVBoxLayout(self._content)
+        self.body.setContentsMargins(18, 18, 18, 12)
+        self.body.setSpacing(12)
+
+        self.form = QFormLayout()
+        self.form.setSpacing(10)
+        # تسميات تلتفّ بدل أن تدفع الحوار عرضاً على الشاشات الصغيرة
+        self.form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        self.form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        self.body.addLayout(self.form)
+
+        self._scroll.setWidget(self._content)
+        outer.addWidget(self._scroll, 1)
+
+        # صفّ الأزرار **خارج** منطقة التمرير فلا يغيب مهما طال النموذج
+        self._buttons_bar = QWidget()
+        self._buttons_bar.setObjectName("dialogButtons")
+        self.buttons = QHBoxLayout(self._buttons_bar)
+        self.buttons.setContentsMargins(18, 10, 18, 14)
+        self.buttons.setSpacing(8)
+        self.buttons.addStretch(1)
+        outer.addWidget(self._buttons_bar)
+
+        self.save_button = None
+
+    # ------------------------------------------------------------------
+    def add_widget(self, widget):
+        """يضيف عنصراً تحت صفوف النموذج (بطاقة تسعيرة، تلميح، تحذير…)."""
+        self.body.addWidget(widget)
+        return widget
+
+    def add_buttons(self, save_text="حفظ", on_save=None, cancel_text="إلغاء",
+                    extra=()):
+        """يبني صفّ الأزرار. زرّ الحفظ افتراضي فيعمل Enter بقصد لا بالصدفة."""
+        for widget in extra:
+            self.buttons.addWidget(widget)
+
+        save = primary_button(save_text)
+        save.setDefault(True)
+        save.setAutoDefault(True)
+        if on_save is not None:
+            save.clicked.connect(on_save)
+        self.buttons.addWidget(save)
+
+        cancel = QPushButton(cancel_text)
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(self.reject)
+        self.buttons.addWidget(cancel)
+
+        self.save_button = save
+        return save
+
+    # ------------------------------------------------------------------
+    def showEvent(self, event):
+        """يحدّ ارتفاع الحوار بالشاشة قبل ظهوره، فلا يخرج شيء عن حدودها."""
+        super().showEvent(event)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self):
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+
+        available = screen.availableGeometry()
+        max_height = int(available.height() * _MAX_HEIGHT_RATIO)
+        max_width = int(available.width() * _MAX_HEIGHT_RATIO)
+
+        wanted = self.sizeHint()
+        height = min(wanted.height(), max_height)
+        width = min(max(wanted.width(), self.minimumWidth()), max_width)
+
+        self.setMaximumHeight(max_height)
+        self.resize(width, height)
+
+        # التوسيط بعد تغيير المقاس: حوار يُفتح نصفه خارج الشاشة لا يُستعمل
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
 
 
 # ---------------------------------------------------------------------------
@@ -194,17 +326,26 @@ class DataTable(QTableView):
             for key, _ in self._headers:
                 if formatter is not None:
                     text = formatter(row, key)
-                else:
+                elif hasattr(row, "keys"):
                     text = row[key] if key in row.keys() else ""
+                else:
+                    text = getattr(row, key, "")
                 item = QStandardItem("" if text is None else fix_dates(str(text)))
                 item.setTextAlignment(
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                 )
                 items.append(item)
 
-            # معرّف الصفّ يُخزَّن في أول خلية فيُسترجع عند الاختيار
-            if "id" in row.keys():
-                items[0].setData(row["id"], Qt.ItemDataRole.UserRole)
+            # معرّف الصفّ يُخزَّن في أول خلية فيُسترجع عند الاختيار.
+            # الصفوف قد تكون سجلّات قاعدة بيانات أو كائنات (مثل التنبيهات)،
+            # فيُقرأ المعرّف من أيّهما بلا افتراض نوع.
+            identifier = None
+            if hasattr(row, "keys") and "id" in row.keys():
+                identifier = row["id"]
+            elif hasattr(row, "subject_id"):
+                identifier = row.subject_id
+            if identifier is not None:
+                items[0].setData(identifier, Qt.ItemDataRole.UserRole)
             self.model_.appendRow(items)
 
         self._fit_columns()

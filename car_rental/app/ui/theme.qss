@@ -16,6 +16,23 @@ QMainWindow, QDialog, #contentArea {
     background: #f4f6f9;
 }
 
+/* صفّ أزرار الحوار: مثبَّت أسفل النافذة خارج منطقة التمرير، ويفصله خطّ
+   ليُقرأ حدّاً بين ما يُمرَّر وما يبقى ثابتاً. */
+/* شريط تنبيهات لوحة المعلومات: يُرى بلا أن يصرخ. */
+#alertBar {
+    background: #fff7ed;
+    color: #9a3412;
+    border: 1px solid #fed7aa;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-weight: 600;
+}
+
+#dialogButtons {
+    background: #eef1f6;
+    border-top: 1px solid #dde3ec;
+}
+
 /* ------------------------- الشريط الجانبي ------------------------- */
 #sidebar {
     background: #16243c;

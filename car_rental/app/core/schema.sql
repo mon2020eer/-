@@ -48,9 +48,12 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS customers (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     full_name      TEXT    NOT NULL,
-    phone          TEXT    NOT NULL,
-    national_id    TEXT    NOT NULL UNIQUE,           -- رقم الجواز أو الرقم الوطني
-    license_number TEXT    NOT NULL,
+    -- الهاتف والرقم الوطني والرخصة اختيارية عمداً: المكتب يستقبل زبوناً واقفاً
+    -- أمامه فيكتب اسمه ويفتح العقد، ثم يُكمل وثائقه. والمنظومة تَسِم الناقص
+    -- بشارة «بيانات ناقصة» وتُلحّ عليه بدل أن تمنع العمل.
+    phone          TEXT,
+    national_id    TEXT    UNIQUE,                    -- رقم الجواز أو الرقم الوطني
+    license_number TEXT,
     license_expiry TEXT,                              -- YYYY-MM-DD
     nationality    TEXT,
     address        TEXT,
@@ -90,6 +93,10 @@ CREATE TABLE IF NOT EXISTS vehicles (
                           CHECK (status IN ('available', 'rented', 'maintenance')),
     odometer      INTEGER NOT NULL DEFAULT 0 CHECK (odometer >= 0),
     chassis_number TEXT,
+    insurance_company   TEXT,
+    insurance_policy_no TEXT,
+    insurance_expiry    TEXT,                         -- YYYY-MM-DD
+    inspection_expiry   TEXT,                         -- الفحص الفنّي، YYYY-MM-DD
     notes         TEXT,
     created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
@@ -138,6 +145,14 @@ CREATE TABLE IF NOT EXISTS contracts (
     status              TEXT    NOT NULL DEFAULT 'open'
                                 CHECK (status IN ('open', 'closed', 'cancelled')),
     notes               TEXT,
+
+    -- بيانات الكفيل: تطلبها نماذج عقود المكاتب المطبوعة ولا مقابل لها في
+    -- المنظومة، فتُخزَّن في العقد لا في العميل لأن الكفيل يتغيّر بين عقد وآخر.
+    guarantor_name        TEXT,
+    guarantor_nationality TEXT,
+    guarantor_passport    TEXT,
+    guarantor_address     TEXT,
+
     created_by          INTEGER NOT NULL REFERENCES users (id),
     closed_by           INTEGER REFERENCES users (id),
     created_at          TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -293,7 +308,18 @@ SELECT
     cu.full_name                                   AS customer_name,
     cu.phone                                       AS customer_phone,
     cu.national_id                                 AS customer_national_id,
+    -- بقيّة بيانات العميل والسيارة: يحتاجها ملء نموذج عقد المكتب، وجلبها هنا
+    -- يوفّر استعلامين إضافيين لكل طباعة.
+    cu.nationality                                 AS customer_nationality,
+    cu.license_number                              AS customer_license_number,
+    cu.license_expiry                              AS customer_license_expiry,
+    cu.address                                     AS customer_address,
     v.plate_number                                 AS plate_number,
+    v.brand                                        AS brand,
+    v.model                                        AS model,
+    v.year                                         AS year,
+    v.color                                        AS color,
+    v.chassis_number                               AS chassis_number,
     v.brand || ' ' || v.model                      AS vehicle_title,
     b.paid_amount                                  AS paid_amount,
     b.balance_due                                  AS balance_due,

@@ -16,8 +16,9 @@ from PyQt6.QtPrintSupport import QPrinter
 
 from .. import config
 from ..core import audit, money
+from ..core import features
 from ..repositories import contracts_repo, payments_repo, settings_repo
-from . import pricing
+from . import pdf_template, pricing
 
 _STATUS_AR = config.CONTRACT_STATUS_LABELS
 _PAYMENT_AR = config.PAYMENT_STATUS_LABELS
@@ -38,6 +39,13 @@ def _date(value):
     الشرطة محرف محايد. في عقد إيجار هذا ليس تشويهاً شكلياً بل تغيير لمعنى
     التاريخ، فتُثبَّت جهة القراءة صراحةً.
     """
+    if value is None or value == "":
+        return "—"
+    return _LRM + _esc(value) + _LRM
+
+
+def _ltr(value):
+    """يثبّت جهة قراءة نصّ لاتيني/رقمي داخل فقرة عربية (لوحة، رقم وثيقة)."""
     if value is None or value == "":
         return "—"
     return _LRM + _esc(value) + _LRM
@@ -109,7 +117,8 @@ def build_html(contract_id, conn=None):
         customer_phone=_esc(contract["customer_phone"]),
         customer_id=_esc(contract["customer_national_id"]),
         vehicle=_esc(contract["vehicle_title"]),
-        plate=_esc(contract["plate_number"]),
+        # رقم اللوحة كالتاريخ: شرطته محرف محايد ينقلبه اتجاه الفقرة العربية
+        plate=_ltr(contract["plate_number"]),
         start_date=_date(contract["start_date"]),
         end_date=_date(contract["actual_end_date"] or contract["expected_end_date"]),
         end_label="تاريخ التسليم الفعلي" if contract["actual_end_date"] else "تاريخ التسليم المتوقَّع",
@@ -128,8 +137,13 @@ def build_html(contract_id, conn=None):
     )
 
 
-def export_pdf(contract_id, output_path=None, conn=None):
-    """يولّد ملف PDF للعقد ويُرجع مساره."""
+def export_pdf(contract_id, output_path=None, force_builtin=False, conn=None):
+    """يولّد ملف PDF للعقد ويُرجع مساره.
+
+    إن رفع المكتب نموذج عقده وعيّن مواضع حقوله، طُبع العقد **على ورقته هو** لا
+    على عقد المنظومة — فهذا ما يعرفه زبائنه ويوقّعون عليه. و``force_builtin``
+    يتخطّى النموذج لمن أراد العقد المولَّد رغم وجوده.
+    """
     contract = contracts_repo.get(contract_id, conn=conn)
     if contract is None:
         raise ValueError("العقد غير موجود.")
@@ -138,6 +152,15 @@ def export_pdf(contract_id, output_path=None, conn=None):
         config.ensure_directories()
         output_path = config.EXPORTS_DIR / ("%s.pdf" % contract["contract_number"])
     output_path = str(output_path)
+
+    if not force_builtin and uses_office_template(conn=conn):
+        result = pdf_template.fill(
+            pdf_template.values_for_contract(contract_id, conn=conn),
+            output_path, conn=conn,
+        )
+        audit.log("export", "contract", contract_id,
+                  {"pdf": output_path, "template": "office"}, conn=conn)
+        return str(result)
 
     document = QTextDocument()
     document.setHtml(build_html(contract_id, conn=conn))
@@ -248,3 +271,18 @@ _TEMPLATE = """<!DOCTYPE html>
         <td>توقيع المكتب<br><br>..............................</td></tr>
   </table>
 </body></html>"""
+
+
+def uses_office_template(conn=None):
+    """هل يُطبع العقد على نموذج المكتب؟
+
+    يشترط ثلاثة معاً: الميزة متاحة في النسخة، وورقة مرفوعة، ومواضع حقول
+    معيَّنة عليها. نقصُ أيّها يعيد الطبع إلى عقد المنظومة بلا رسالة خطأ —
+    فالمكتب يطبع عقداً صحيحاً في كل حال.
+    """
+    if not features.has_feature("contract_template"):
+        return False
+    try:
+        return pdf_template.is_ready(conn=conn)
+    except Exception:
+        return False

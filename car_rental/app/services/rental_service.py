@@ -58,7 +58,7 @@ def _wrap_overlap_error(error):
 def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
                   discount=0, extra_charges=0, deposit_amount=0,
                   deposit_method="cash", pickup_location=None, notes=None,
-                  start_odometer=None, start_time=None, conn=None):
+                  start_odometer=None, start_time=None, guarantor=None, conn=None):
     """يفتح عقد إيجار جديداً ويُرجع ``(معرّف العقد، رقم العقد)``.
 
     يحسب القيمة تلقائياً من تعرفة السيارة ومدّة الإيجار، ويحفظ لقطة من السعر
@@ -109,6 +109,12 @@ def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
 
     _assert_period_free(vehicle_id, start_iso, end_iso, conn=conn)
 
+    # الكفيل اختياري تماماً: نماذج بعض المكاتب تطلبه وبعضها لا يذكره
+    guarantor = {key: (str(value).strip() or None)
+                 for key, value in (guarantor or {}).items() if value}
+    guarantor = {key: guarantor.get(key)
+                 for key in ("name", "nationality", "passport", "address")}
+
     hourly_rate = int(vehicle["hourly_rate"] or 0) or pricing.default_hourly_rate(
         vehicle["daily_rate"]
     )
@@ -124,8 +130,11 @@ def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
                         daily_rate_snapshot, weekly_rate_snapshot, hourly_rate_snapshot,
                         currency_code, rate_to_base,
                         days_count, subtotal, discount, extra_charges, total_amount,
-                        start_odometer, pickup_location, notes, created_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        start_odometer, pickup_location, notes,
+                        guarantor_name, guarantor_nationality,
+                        guarantor_passport, guarantor_address, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                           ?, ?, ?, ?, ?)""",
                 (
                     contract_number, customer_id, vehicle_id,
                     start_iso, end_iso, start_time,
@@ -134,7 +143,10 @@ def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
                     estimate["days"], estimate["subtotal"], estimate["discount"],
                     estimate["extra_charges"], estimate["total"],
                     start_odometer if start_odometer is not None else vehicle["odometer"],
-                    pickup_location, notes, user.id,
+                    pickup_location, notes,
+                    guarantor.get("name"), guarantor.get("nationality"),
+                    guarantor.get("passport"), guarantor.get("address"),
+                    user.id,
                 ),
             )
             contract_id = cursor.lastrowid

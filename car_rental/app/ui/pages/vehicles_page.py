@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """صفحة السيارات: الأسطول وحالاته وتعرفة الإيجار."""
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtWidgets import (
-    QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
+    QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
     QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -12,25 +12,28 @@ from ...core import money, session
 from ...repositories import settings_repo, vehicles_repo
 from ...services import pricing
 from ..widgets.common import (
-    Card, DataTable, PageHeader, combo, confirm, fix_dates, money_field,
-    primary_button, search_box, show_error, show_info,
+    Card, DataTable, FormDialog, PageHeader, combo, confirm, date_field,
+    fix_dates, money_field, primary_button, search_box, show_error, show_info,
 )
 
 
-class VehicleDialog(QDialog):
+def _optional(row, key):
+    """يقرأ عموداً قد يغيب في قاعدة لم تُرقَّ بعد، ويُرجع نصّاً دائماً."""
+    value = row[key] if key in row.keys() else None
+    return "" if value is None else str(value)
+
+
+class VehicleDialog(FormDialog):
     """حوار إضافة سيارة أو تعديل بياناتها وتعرفتها."""
 
     def __init__(self, parent=None, vehicle=None):
-        super().__init__(parent)
+        super().__init__(
+            parent,
+            title="تعديل بيانات سيارة" if vehicle else "إضافة سيارة جديدة",
+            width=540,
+        )
         self._vehicle = vehicle
-
-        self.setWindowTitle("تعديل بيانات سيارة" if vehicle else "إضافة سيارة جديدة")
-        self.setMinimumWidth(520)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        form = self.form
 
         self.brand = QLineEdit()
         self.model = QLineEdit()
@@ -54,6 +57,21 @@ class VehicleDialog(QDialog):
         self.odometer.setSuffix(" كم")
 
         self.chassis = QLineEdit()
+
+        # التأمين والفحص: تواريخ اختيارية، ومربّع تفعيل لأن كثيراً من السيارات
+        # تُسجَّل قبل أن يُعرف تاريخ وثيقتها، وتاريخ مُختلَق أسوأ من لا تاريخ.
+        self.insurance_company = QLineEdit()
+        self.insurance_policy = QLineEdit()
+        self.insurance_expiry = date_field(QDate.currentDate().addYears(1))
+        self.has_insurance = QCheckBox("للسيارة تأمين بتاريخ انتهاء معروف")
+        self.has_insurance.toggled.connect(self.insurance_expiry.setEnabled)
+        self.insurance_expiry.setEnabled(False)
+
+        self.inspection_expiry = date_field(QDate.currentDate().addYears(1))
+        self.has_inspection = QCheckBox("للسيارة فحص فنّي بتاريخ انتهاء معروف")
+        self.has_inspection.toggled.connect(self.inspection_expiry.setEnabled)
+        self.inspection_expiry.setEnabled(False)
+
         self.notes = QPlainTextEdit()
         self.notes.setMaximumHeight(70)
 
@@ -68,29 +86,26 @@ class VehicleDialog(QDialog):
         form.addRow("العملة", self.currency)
         form.addRow("قراءة العدّاد", self.odometer)
         form.addRow("رقم الشاصي", self.chassis)
+        form.addRow("شركة التأمين", self.insurance_company)
+        form.addRow("رقم وثيقة التأمين", self.insurance_policy)
+        form.addRow("", self.has_insurance)
+        form.addRow("انتهاء التأمين", self.insurance_expiry)
+        form.addRow("", self.has_inspection)
+        form.addRow("انتهاء الفحص الفنّي", self.inspection_expiry)
         form.addRow("ملاحظات", self.notes)
-
-        layout.addLayout(form)
 
         hint = QLabel(
             "السعر الأسبوعي يُطبَّق تلقائياً على كل أسبوع كامل من مدّة العقد،"
             " ولن يدفع العميل عن أيام متبقّية أكثر من ثمن أسبوع كامل.\n"
             "وسعر الساعة يُستعمل عند الإرجاع المبكّر؛ إن تُرك صفراً حُسب تلقائياً"
-            " بقسمة السعر اليومي على 24."
+            " بقسمة السعر اليومي على 24.\n"
+            "وتواريخ التأمين والفحص تُنبّهك قبل انتهائها بمدّة تضبطها في الإعدادات."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        self.add_widget(hint)
 
-        buttons = QHBoxLayout()
-        save = primary_button("حفظ")
-        save.clicked.connect(self._save)
-        cancel = QPushButton("إلغاء")
-        cancel.clicked.connect(self.reject)
-        buttons.addStretch(1)
-        buttons.addWidget(save)
-        buttons.addWidget(cancel)
-        layout.addLayout(buttons)
+        self.add_buttons(save_text="حفظ", on_save=self._save)
 
         if vehicle:
             self._load(vehicle)
@@ -107,6 +122,13 @@ class VehicleDialog(QDialog):
         self.odometer.setValue(int(row["odometer"] or 0))
         self.chassis.setText(row["chassis_number"] or "")
         self.notes.setPlainText(row["notes"] or "")
+
+        self.insurance_company.setText(_optional(row, "insurance_company"))
+        self.insurance_policy.setText(_optional(row, "insurance_policy_no"))
+        self._load_expiry(self.has_insurance, self.insurance_expiry,
+                          _optional(row, "insurance_expiry"))
+        self._load_expiry(self.has_inspection, self.inspection_expiry,
+                          _optional(row, "inspection_expiry"))
 
         index = self.currency.findData(row["currency_code"])
         if index >= 0:
@@ -125,8 +147,25 @@ class VehicleDialog(QDialog):
             "currency_code": self.currency.currentData(),
             "odometer": self.odometer.value(),
             "chassis_number": self.chassis.text().strip() or None,
+            "insurance_company": self.insurance_company.text().strip() or None,
+            "insurance_policy_no": self.insurance_policy.text().strip() or None,
+            "insurance_expiry": self._expiry(self.has_insurance, self.insurance_expiry),
+            "inspection_expiry": self._expiry(self.has_inspection,
+                                              self.inspection_expiry),
             "notes": self.notes.toPlainText().strip() or None,
         }
+
+    @staticmethod
+    def _load_expiry(checkbox, field, value):
+        checkbox.setChecked(bool(value))
+        if value:
+            field.setDate(QDate.fromString(str(value), "yyyy-MM-dd"))
+
+    @staticmethod
+    def _expiry(checkbox, field):
+        if not checkbox.isChecked():
+            return None
+        return field.date().toString("yyyy-MM-dd")
 
     def _save(self):
         try:

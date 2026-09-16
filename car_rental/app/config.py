@@ -43,6 +43,7 @@ DB_PATH = DATA_DIR / "car_rental.db"
 ATTACHMENTS_DIR = DATA_DIR / "attachments"
 BACKUP_DIR = DATA_DIR / "backups"          # النسخ المحلية المؤقتة قبل الرفع
 EXPORTS_DIR = DATA_DIR / "exports"         # ملفات PDF و CSV المولَّدة
+TEMPLATES_DIR = DATA_DIR / "templates"     # نماذج عقود المكاتب المرفوعة
 LOG_PATH = DATA_DIR / "app.log"
 
 # بيانات اعتماد Google التي ينزّلها المالك من Google Cloud Console
@@ -116,6 +117,7 @@ def reload_paths():
     التشغيل الحقيقية إطلاقاً.
     """
     global DATA_DIR, DB_PATH, ATTACHMENTS_DIR, BACKUP_DIR, EXPORTS_DIR, LOG_PATH
+    global TEMPLATES_DIR
     global GOOGLE_CREDENTIALS_PATH, GOOGLE_TOKEN_PATH
 
     DATA_DIR = _default_home()
@@ -123,6 +125,7 @@ def reload_paths():
     ATTACHMENTS_DIR = DATA_DIR / "attachments"
     BACKUP_DIR = DATA_DIR / "backups"
     EXPORTS_DIR = DATA_DIR / "exports"
+    TEMPLATES_DIR = DATA_DIR / "templates"
     LOG_PATH = DATA_DIR / "app.log"
     GOOGLE_CREDENTIALS_PATH = DATA_DIR / "credentials.json"
     GOOGLE_TOKEN_PATH = DATA_DIR / "token.json"
@@ -131,6 +134,7 @@ def reload_paths():
 
 def ensure_directories():
     """ينشئ مجلدات البيانات إن لم تكن موجودة. يُستدعى قبل أي عملية كتابة."""
-    for directory in (DATA_DIR, ATTACHMENTS_DIR, BACKUP_DIR, EXPORTS_DIR):
+    for directory in (DATA_DIR, ATTACHMENTS_DIR, BACKUP_DIR, EXPORTS_DIR,
+                      TEMPLATES_DIR):
         directory.mkdir(parents=True, exist_ok=True)
     return DATA_DIR
