@@ -1,11 +1,26 @@
-# =============================================================================
+﻿# =============================================================================
 #  بناء نسخة ويندوز التنفيذية من منظومة إدارة مكتب إيجار السيارات
 #
 #  التشغيل من مجلد المشروع (PowerShell):
 #      powershell -ExecutionPolicy Bypass -File build\build_exe.ps1
 #
+#  وعلى اتصال بطيء، للبناء بالمكتبات المثبّتة أصلاً بلا تنزيل جديد:
+#      powershell -ExecutionPolicy Bypass -File build\build_exe.ps1 -NoVenv
+#
 #  الناتج: build\dist\CarRentalOffice\CarRentalOffice.exe
+#
+#  ⚠ هذا الملف محفوظ بترميز UTF-8 **مع علامة BOM**، ولا يجوز حفظه بغيرها.
+#     Windows PowerShell 5.1 يقرأ ملفات .ps1 بلا BOM بترميز النظام العربي
+#     (CP1256)، فتتحوّل الشدّة «ـّ» والشرطة «—» وعلامة «✓» إلى علامات اقتباس
+#     ذكية يعدّها المفسّر بداية نصّ ونهايته، فينكسر السكربت برسالة
+#     «Missing closing '}' in statement block».
 # =============================================================================
+
+param(
+    # يبني بمكتبات بايثون المثبّتة على الجهاز بدل إنشاء بيئة افتراضية جديدة.
+    # مفيد على اتصال بطيء: البيئة الجديدة تُعيد تنزيل Qt كاملاً (٥٨ ميغابايت).
+    [switch]$NoVenv
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -30,16 +45,22 @@ if ([version]$version -lt [version]"3.9") {
 }
 
 # --- 2) البيئة الافتراضية ---------------------------------------------------
-if (-not (Test-Path ".venv")) {
-    Write-Host "-> إنشاء بيئة افتراضية…" -ForegroundColor Yellow
-    python -m venv .venv
+if ($NoVenv) {
+    Write-Host "-> البناء بمكتبات الجهاز (تُخطّيت البيئة الافتراضية)." -ForegroundColor Yellow
+} else {
+    if (-not (Test-Path ".venv")) {
+        Write-Host "-> إنشاء بيئة افتراضية…" -ForegroundColor Yellow
+        python -m venv .venv
+    }
+    & ".\.venv\Scripts\Activate.ps1"
 }
-& ".\.venv\Scripts\Activate.ps1"
 
 # --- 3) المكتبات ------------------------------------------------------------
 Write-Host "-> تثبيت المكتبات…" -ForegroundColor Yellow
-python -m pip install --upgrade pip --quiet
-python -m pip install -r requirements.txt --quiet
+if (-not $NoVenv) {
+    python -m pip install --upgrade pip --quiet
+    python -m pip install -r requirements.txt --quiet
+}
 python -m pip install pyinstaller==6.10.0 pytest --quiet
 
 # --- 4) الاختبارات قبل البناء ----------------------------------------------
