@@ -162,7 +162,7 @@ icon=str(PROJECT_DIR / "build" / "icon.ico"),
 
 | المشكلة | الحل |
 |---|---|
-| `pyinstaller غير معروف` | البيئة الافتراضية غير مفعّلة: `.\.venv\Scripts\Activate.ps1` |
+| `The term 'pyinstaller' is not recognized` | مجلد Scripts ليس في PATH. **حدّث المستودع** (`git pull`): صار السكربت ينادي الأداة بـ `python -m PyInstaller` فلا يتعلّق بـ PATH |
 | `ModuleNotFoundError` عند تشغيل الـ`.exe` | أضف اسم الوحدة إلى `hiddenimports` في ملف `.spec` وأعد البناء |
 | التطبيق يفتح ويغلق فوراً | غيّر `console=False` إلى `True` في ملف `.spec` مؤقّتاً لرؤية رسالة الخطأ |
 | `schema.sql not found` | تأكّد من بقاء قسم `datas` في ملف `.spec` كما هو |
@@ -172,7 +172,23 @@ icon=str(PROJECT_DIR / "build" / "icon.ico"),
 | `Missing closing '}' in statement block` عند تشغيل سكربت البناء | فُقدت علامة BOM من `build_exe.ps1` (يحدث إذا حُرّر وحُفظ بمحرّر يُسقطها). أعد جلب الملف: `git checkout build\build_exe.ps1` |
 | `Could not find a version that satisfies the requirement pyinstaller` | بايثون عندك أحدث ممّا تسمح به النسخة المطلوبة. **حدّث المستودع** (`git pull`) ولا تنزّل بايثون أقدم — الحلّ في السكربت لا في جهازك |
 | `No module named pytest` رغم نجاح التثبيت ظاهرياً | فشل تثبيت سابق ومضى السكربت. حدّث المستودع: صار يقف عند أول فشل ويسمّيه |
-| `WARNING: The scripts … are installed in '…\Scripts' which is not on PATH` | تحذير لا خطأ، ولا يمنع البناء: السكربت ينادي الأدوات بـ `python -m` لا بأسمائها |
+| `WARNING: The scripts … are installed in '…\Scripts' which is not on PATH` | تحذير من pip لا يمنع البناء **بعد تحديث المستودع**، لأن السكربت صار ينادي كل أدوات بايثون بـ `python -m`. وقبل ذلك التحديث كان هذا التحذير إنذاراً دقيقاً بفشل PyInstaller |
+
+### لماذا تُنادى الأدوات بـ `python -m` لا بأسمائها؟
+
+`pip` يضع الملفّات التنفيذية (`pyinstaller.exe` و`pytest.exe` …) في مجلد
+`Scripts` الخاصّ بالمستخدم، **وهذا المجلد ليس في PATH على كثير من أجهزة
+ويندوز** — و`pip` نفسها تحذّر من ذلك عند التثبيت. فالنداء بالاسم المجرَّد يسقط:
+
+```
+The term 'pyinstaller' is not recognized as the name of a cmdlet …
+```
+
+أمّا `python -m PyInstaller` فيستعمل **المفسّر نفسه** الذي ثُبّتت فيه الحزمة،
+فلا يتعلّق الأمر بـ PATH إطلاقاً. ويحرس هذه القاعدةَ اختبارٌ في
+`tests/test_build_scripts.py` يرفض أي نداء بالاسم المجرَّد في سكربت البناء أو
+سير العمل — لأن هذا الصنف من الأعطاب ينجح على مُشغّلات GitHub ويسقط على جهاز
+المكتب، فلا يكشفه البناء الآلي.
 
 ### لماذا لا تُثبَّت PyInstaller على رقم واحد؟
 

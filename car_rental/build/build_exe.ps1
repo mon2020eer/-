@@ -118,12 +118,15 @@ Write-Host "-> تنظيف مخرجات البناء السابقة…" -Foregrou
 Remove-Item -Recurse -Force "build\dist", "build\work" -ErrorAction SilentlyContinue
 
 Write-Host "-> بناء ملف التشغيل بـ PyInstaller…" -ForegroundColor Yellow
-pyinstaller "build\car_rental.spec" --noconfirm `
-    --distpath "build\dist" --workpath "build\work"
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "✗ فشل البناء." -ForegroundColor Red
-    exit 1
+# **بـ `python -m` لا بالاسم المجرَّد**: pip يضع `pyinstaller.exe` في مجلد
+# Scripts الخاصّ بالمستخدم، وهو ليس في PATH على كثير من أجهزة ويندوز (وتقول
+# pip ذلك بتحذير صريح عند التثبيت). فالنداء بالاسم يسقط بـ
+# «The term 'pyinstaller' is not recognized»، بينما `python -m` يستعمل
+# المفسّر نفسه الذي ثُبّتت فيه الحزمة فلا يتعلّق بـ PATH إطلاقاً.
+Invoke-Step "بناء ملف التشغيل" {
+    python -m PyInstaller "build\car_rental.spec" --noconfirm `
+        --distpath "build\dist" --workpath "build\work"
 }
 
 # --- 6) فحص الناتج ----------------------------------------------------------
