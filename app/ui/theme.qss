@@ -174,8 +174,13 @@ QPushButton#success {
 QPushButton#success:hover { background: #128040; }
 
 /* ------------------------- حقول الإدخال ------------------------- */
-QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
+/* حقول الوقت والتاريخ-والوقت مذكورة صراحةً: غيابها عن هذا التعداد كان يجعل
+   حقل الوقت في حوار العقد الجديد يرث خلفية ويندوز الداكنة. واللوحة الفاتحة في
+   `rtl.py` تحمي الصنف كلّه، وهذا التعداد يمنح المذكورين شكل المنظومة نفسه. */
+QLineEdit, QComboBox, QDateEdit, QTimeEdit, QDateTimeEdit,
+QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {
     background: #ffffff;
+    color: #1f2937;                 /* صريح: لا يُترك لونُ النصّ للوحة النظام */
     border: 1px solid #cfd8e3;
     border-radius: 8px;
     padding: 7px 10px;
@@ -183,9 +188,21 @@ QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainText
     selection-color: #ffffff;
 }
 
-QLineEdit:focus, QComboBox:focus, QDateEdit:focus,
-QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {
+QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus,
+QDateTimeEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
+QTextEdit:focus, QPlainTextEdit:focus {
     border: 1px solid #2f6fed;
+}
+
+/* جسم القائمة المنسدلة المنبثقة وقوائم العناصر: عنصر منفصل عن الحقل نفسه،
+   فالقائمة كانت تنبثق سوداء بينما الحقل أبيض. */
+QAbstractItemView, QListWidget {
+    background: #ffffff;
+    color: #1f2937;
+    border: 1px solid #cfd8e3;
+    selection-background-color: #2f6fed;
+    selection-color: #ffffff;
+    outline: none;
 }
 
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {

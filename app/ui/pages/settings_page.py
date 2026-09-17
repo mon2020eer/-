@@ -11,7 +11,7 @@ from ...core import features, money
 from ...repositories import settings_repo
 from ...services import pdf_template
 from ..widgets.common import (
-    Card, DataTable, PageHeader, combo, confirm, money_field, primary_button,
+    Card, DataTable, PageHeader, scrollable_body, combo, confirm, money_field, primary_button,
     show_error, show_info,
 )
 
@@ -24,9 +24,8 @@ class SettingsPage(QWidget):
         self._build()
 
     def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(14)
+        # جسم قابل للتمرير: محتوى هذه الصفحة يتجاوز شاشة محمول صغيرة
+        layout = scrollable_body(self)
 
         layout.addWidget(PageHeader("الإعدادات", "بيانات المكتب والعملات وخيارات النسخ الاحتياطي"))
 
@@ -41,9 +40,14 @@ class SettingsPage(QWidget):
         office_form = QFormLayout()
         office_form.setSpacing(10)
 
+        # حدّ أدنى للعرض: هذه الحقول في عمود يقاسم عمودَ العملات عرض الصفحة،
+        # فكانت تخرج ضيّقة لا تُبين ما يُكتب فيها — واسم المكتب يُطبع في
+        # ترويسة كل عقد، فمن حقّ صاحبه أن يراه كاملاً وهو يكتبه.
         self.office_name = QLineEdit()
         self.office_phone = QLineEdit()
         self.office_address = QLineEdit()
+        for field in (self.office_name, self.office_phone, self.office_address):
+            field.setMinimumWidth(260)
 
         office_form.addRow("اسم المكتب", self.office_name)
         office_form.addRow("رقم الهاتف", self.office_phone)

@@ -9,7 +9,7 @@
 import pathlib
 
 from PyQt6.QtCore import QLocale, Qt
-from PyQt6.QtGui import QFont, QFontDatabase
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PyQt6.QtWidgets import QApplication
 
 from .. import config
@@ -45,6 +45,43 @@ def load_stylesheet():
     return ""
 
 
+# لوحة ألوان التطبيق — فاتحة صريحة لا موروثة من النظام.
+#
+# **لماذا تُثبَّت بدل أن تُترك للنظام؟** ورقة الأنماط تلوّن حقول الإدخال بتعداد
+# أسماء أصنافها (`QLineEdit, QComboBox, …`). وكل صنف لا يرد في ذلك التعداد يسقط
+# إلى لوحة ألوان نظام التشغيل: ويندوز ١١ في الوضع الداكن يعطيه خلفية سوداء،
+# ويبقى نصّه داكناً — فيصير داكناً على داكن لا يُقرأ.
+#
+# ووقع ذلك فعلاً على جهاز المالك: حقل الوقت في حوار العقد الجديد، وجسم القائمة
+# المنسدلة في حوار المستخدم الجديد. وعلاجُه بإضافة الأسماء الناقصة علاجٌ لليوم
+# وحده: كل صنف يُضاف غداً يولد أسود من جديد، ولا يُكتشف إلّا على جهاز عميل.
+#
+# فالمنظومة مصمَّمة فاتحة — كل ألوان `theme.qss` فاتحة — ومن حقّها أن تقول ذلك
+# صراحةً مرّة واحدة، بدل أن تفاوض نظام التشغيل عنصراً عنصراً.
+LIGHT_PALETTE_COLORS = {
+    QPalette.ColorRole.Window:          "#f4f6f9",   # خلفية النوافذ
+    QPalette.ColorRole.WindowText:      "#1f2937",   # نصّ عام
+    QPalette.ColorRole.Base:            "#ffffff",   # خلفية حقول الإدخال
+    QPalette.ColorRole.AlternateBase:   "#f1f3f6",   # صفوف الجداول المتناوبة
+    QPalette.ColorRole.Text:            "#1f2937",   # نصّ الحقول
+    QPalette.ColorRole.Button:          "#ffffff",
+    QPalette.ColorRole.ButtonText:      "#1f2937",
+    QPalette.ColorRole.ToolTipBase:     "#ffffff",
+    QPalette.ColorRole.ToolTipText:     "#1f2937",
+    QPalette.ColorRole.PlaceholderText: "#9aa4b2",
+    QPalette.ColorRole.Highlight:       "#2f6fed",   # التحديد
+    QPalette.ColorRole.HighlightedText: "#ffffff",
+}
+
+
+def light_palette():
+    """لوحة ألوان فاتحة صريحة، مستقلّة عن وضع نظام التشغيل."""
+    palette = QPalette()
+    for role, value in LIGHT_PALETTE_COLORS.items():
+        palette.setColor(role, QColor(value))
+    return palette
+
+
 def apply(app):
     """يطبّق الاتجاه واللغة والخط والنمط على التطبيق. يُستدعى مرّة عند الإقلاع."""
     app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -59,5 +96,7 @@ def apply(app):
     QLocale.setDefault(locale)
 
     app.setFont(pick_font())
+    # قبل ورقة الأنماط: الأنماط تبني فوق اللوحة لا العكس
+    app.setPalette(light_palette())
     app.setStyleSheet(load_stylesheet())
     return app

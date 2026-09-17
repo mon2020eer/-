@@ -13,7 +13,7 @@ from ...core import arabic, features, money
 from ...repositories import contracts_repo, customers_repo, settings_repo
 from ...services import alerts, reporting
 from ..widgets.common import (
-    Card, DataTable, PageHeader, StatCard, search_box, show_error,
+    Card, DataTable, PageHeader, scrollable_body, StatCard, search_box, show_error,
 )
 
 
@@ -26,9 +26,8 @@ class DashboardPage(QWidget):
         self._build()
 
     def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(16)
+        # جسم قابل للتمرير: محتوى هذه الصفحة يتجاوز شاشة محمول صغيرة
+        layout = scrollable_body(self, spacing=16)
 
         self.header = PageHeader("لوحة المعلومات", "نظرة عامّة على حالة المكتب اليوم")
 

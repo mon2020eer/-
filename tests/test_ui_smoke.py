@@ -712,3 +712,117 @@ def test_a_licensed_customer_keeps_the_expiry_date(gui, conn, admin):
     dialog.full_name.setText("صاحب رخصة")
     dialog.license_number.setText("LC-2030")
     assert dialog.data()["license_expiry"]
+
+
+# ---------------------------------------------------------------------------
+# لوحة الألوان: ويندوز الداكن لا يتسرّب إلى واجهة مصمَّمة فاتحة
+# ---------------------------------------------------------------------------
+_INPUT_WIDGETS = (
+    "QLineEdit", "QTextEdit", "QPlainTextEdit", "QComboBox", "QDateEdit",
+    "QTimeEdit", "QDateTimeEdit", "QSpinBox", "QDoubleSpinBox",
+    "QListWidget", "QCheckBox",
+)
+
+
+def _background_luminance(widget):
+    """سطوع خلفية عنصر — يُقاس من بكسل مرسوم فعلاً لا من ورقة الأنماط."""
+    widget.resize(200, 32)
+    widget.show()
+    color = widget.grab().toImage().pixelColor(100, 16)
+    return (color.red() * 299 + color.green() * 587 + color.blue() * 114) / 1000, color
+
+
+def test_no_widget_inherits_a_dark_system_palette(qt_app):
+    """كل عنصر إدخال يبقى فاتحاً ولو كان ويندوز في الوضع الداكن.
+
+    `theme.qss` يلوّن الحقول **بتعداد أسماء أصنافها**، وكل صنف غير مذكور يسقط
+    إلى لوحة ألوان النظام: خلفية سوداء ونصّ داكن فوقها، فلا يُقرأ. وهذا ما
+    وقع فعلاً على جهاز المالك في حقل الوقت بحوار العقد الجديد.
+
+    والحارس يقيس **بكسلاً مرسوماً** لا نصّ ورقة الأنماط، ويشمل كل صنف تستعمله
+    الواجهة — فأي صنف يُضاف لاحقاً ويولد أسود يسقط عليه هنا، على لينكس، قبل
+    أن يصل إلى جهاز عميل.
+    """
+    from PyQt6 import QtWidgets
+    from PyQt6.QtGui import QColor, QPalette
+
+    from app.ui import rtl
+
+    # محاكاة الوضع الداكن في ويندوز ١١
+    dark = QPalette()
+    dark.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
+    dark.setColor(QPalette.ColorRole.Window, QColor("#202020"))
+    dark.setColor(QPalette.ColorRole.Button, QColor("#2b2b2b"))
+    dark.setColor(QPalette.ColorRole.Text, QColor("#ffffff"))
+    qt_app.setPalette(dark)
+
+    rtl.apply(qt_app)          # ما يفعله التطبيق عند الإقلاع
+
+    dark_widgets = []
+    for name in _INPUT_WIDGETS:
+        widget = getattr(QtWidgets, name)()
+        luminance, color = _background_luminance(widget)
+        if luminance <= 128:
+            dark_widgets.append("%s=%s" % (name, color.name()))
+
+    assert not dark_widgets, (
+        "عناصر ورثت خلفية داكنة من النظام:\n  " + "\n  ".join(dark_widgets)
+    )
+
+
+# ---------------------------------------------------------------------------
+# التمرير: ما يتجاوز ارتفاع النافذة يجب أن يُبلَغ لا أن يُقصّ
+# ---------------------------------------------------------------------------
+# الصفحات الطويلة: محتواها بطاقات ونماذج تتجاوز شاشة محمول صغيرة. أمّا صفحات
+# الجداول فجداولها تُمرَّر داخلياً، ولفّها في منطقة تمرير يُنتج شريطين متداخلين.
+_SCROLLABLE_PAGES = (
+    ("settings_page", "SettingsPage"),
+    ("backup_page", "BackupPage"),
+    ("reports_page", "ReportsPage"),
+    ("dashboard_page", "DashboardPage"),
+)
+
+
+def _build_page(module_name, class_name):
+    import importlib
+
+    module = importlib.import_module("app.ui.pages.%s" % module_name)
+    return getattr(module, class_name)()
+
+
+@pytest.mark.parametrize("module_name, class_name", _SCROLLABLE_PAGES,
+                         ids=[name for name, _ in _SCROLLABLE_PAGES])
+def test_long_pages_can_be_scrolled(gui, conn, admin, module_name, class_name):
+    """الصفحة الطويلة تُمرَّر على شاشة صغيرة ولا تُقصّ.
+
+    لم تكن في المنظومة صفحة واحدة قابلة للتمرير: ما تجاوز ارتفاع النافذة
+    يختفي بلا شريط ولا أثر. واصطدم المالك بذلك في الإعدادات — وهي أطولها —
+    فلم يصل إلى أزرار أسفلها.
+    """
+    from PyQt6.QtWidgets import QScrollArea
+
+    page = _build_page(module_name, class_name)
+    areas = page.findChildren(QScrollArea)
+    assert areas, "لا توجد منطقة تمرير في %s" % class_name
+
+
+@pytest.mark.parametrize("module_name, class_name", _SCROLLABLE_PAGES,
+                         ids=[name for name, _ in _SCROLLABLE_PAGES])
+def test_long_pages_do_not_scroll_when_there_is_room(gui, conn, admin,
+                                                     module_name, class_name):
+    """وعلى شاشة واسعة لا يظهر شريط تمرير بلا داع.
+
+    الحارس المقابل: منطقة تمرير سيّئة الضبط تُظهر شريطاً دائماً وتمنع المحتوى
+    من ملء الشاشة — فيصير العلاج داءً.
+    """
+    from PyQt6.QtWidgets import QScrollArea
+
+    page = _build_page(module_name, class_name)
+    page.resize(1600, 1080)
+    page.show()
+    gui.processEvents()
+
+    area = page.findChildren(QScrollArea)[0]
+    assert not area.verticalScrollBar().isVisible(), (
+        "شريط تمرير ظاهر بلا داع في %s على شاشة 1080" % class_name
+    )

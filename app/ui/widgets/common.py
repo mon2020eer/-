@@ -213,6 +213,40 @@ class FormDialog(QDialog):
 # ---------------------------------------------------------------------------
 # عناصر بنائية
 # ---------------------------------------------------------------------------
+def scrollable_body(page, margins=(22, 20, 22, 20), spacing=14):
+    """يبني جسم صفحة **قابلاً للتمرير** ويُرجع تخطيطه.
+
+    تُستعمل بدل ``QVBoxLayout(self)`` في الصفحات التي يتجاوز محتواها ارتفاع
+    شاشة صغيرة: لم تكن في المنظومة صفحة واحدة تُمرَّر، فما نزل تحت حافّة
+    النافذة كان **يختفي بلا شريط ولا أثر** — واصطدم بذلك صاحب المكتب في
+    الإعدادات فلم يبلغ أزرار الحفظ أسفلها.
+
+    ``setWidgetResizable(True)`` يجعل المحتوى يملأ المساحة حين تتّسع ويُمرَّر
+    حين تضيق، فلا تنكسر معاملات التمدّد في الصفحات التي تنتهي بجدول يملأ ما
+    تحته. وبلا إطار: منطقة التمرير وسيلةٌ لا تُرى.
+
+    ولا تُستعمل في صفحات الجداول: الجدول يُمرَّر داخلياً، ولفّه هنا يُنتج
+    شريطَي تمرير متداخلين — علاجٌ يُحدث داءً.
+    """
+    outer = QVBoxLayout(page)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(0)
+
+    area = QScrollArea(page)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    outer.addWidget(area)
+
+    content = QWidget()
+    area.setWidget(content)
+
+    layout = QVBoxLayout(content)
+    layout.setContentsMargins(*margins)
+    layout.setSpacing(spacing)
+    return layout
+
+
 class Card(QFrame):
     """بطاقة بيضاء بحواف دائرية تحتضن مجموعة عناصر."""
 

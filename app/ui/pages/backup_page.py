@@ -16,7 +16,7 @@ from ... import config
 from ...repositories import settings_repo
 from ...services.backup import backup_service, drive_client
 from ..widgets.common import (
-    Card, DataTable, PageHeader, confirm, fix_dates, primary_button, show_error,
+    Card, DataTable, PageHeader, scrollable_body, confirm, fix_dates, primary_button, show_error,
     show_info, show_warning,
 )
 
@@ -105,9 +105,8 @@ class BackupPage(QWidget):
         self._build()
 
     def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(14)
+        # جسم قابل للتمرير: محتوى هذه الصفحة يتجاوز شاشة محمول صغيرة
+        layout = scrollable_body(self)
 
         self.header = PageHeader(
             "النسخ الاحتياطي", "حفظ نسخة يومية من قاعدة البيانات في Google Drive"
