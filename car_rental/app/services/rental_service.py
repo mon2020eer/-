@@ -426,11 +426,9 @@ def cancel_contract(contract_id, reason=None, conn=None):
                 WHERE id = ?""",
             (session.current_user_id(), reason, reason, contract_id),
         )
-        tx.execute(
-            """UPDATE vehicles SET status = 'available'
-                WHERE id = ? AND status = 'rented'""",
-            (contract["vehicle_id"],),
-        )
+        # لا تُفرض «متاحة» فرضاً: السيارة قد تحمل عقداً جارياً آخر — إلغاء حجز
+        # قادم لا يجوز أن يُحرّر سيارةً في يد عميل اليوم.
+        vehicles_repo.sync_status(contract["vehicle_id"], conn=tx)
         audit.log("cancel", "contract", contract_id, {"reason": reason}, conn=tx)
 
     return True
@@ -464,6 +462,9 @@ def extend_contract(contract_id, new_expected_end_date, conn=None):
             (new_end.isoformat(), estimate["days"], estimate["subtotal"],
              estimate["total"], contract_id),
         )
+        # المدّة تغيّرت، فحالة السيارة تُعاد اشتقاقها: حجزٌ أُنشئ للغد قد يكون
+        # صار إيجار اليوم قبل أن يُمدَّد.
+        vehicles_repo.sync_status(contract["vehicle_id"], conn=tx)
         audit.log(
             "update", "contract", contract_id,
             {"extended_to": new_end.isoformat(), "total": estimate["total"]}, conn=tx,

@@ -112,3 +112,26 @@ def test_logged_out_user_cannot_act(conn, admin):
     with pytest.raises(session.PermissionDenied):
         customers_repo.create({"full_name": "س", "phone": "1", "national_id": "1",
                                "license_number": "1"}, conn=conn)
+
+
+def test_last_admin_check_runs_inside_the_write_transaction(conn, admin, monkeypatch):
+    """عدّ المديرين الفعّالين يجري تحت قفل الكتابة لا قبله.
+
+    لو جرى قبله لرأى مديران متزامنان مديرَين فعّالين، ثم عطّل كلٌّ منهما
+    الآخر — فتصبح المنظومة بلا مدير، وهي حالة لا تُصلَح من داخل التطبيق.
+    """
+    from app.repositories import users_repo
+
+    users_repo.create("thani", "المدير الثاني", "Sayara2026", "admin", conn=conn)
+
+    seen = {}
+    original = users_repo.count_active_admins
+
+    def spy(conn=None):
+        seen["locked"] = bool(conn is not None and conn.in_transaction)
+        return original(conn=conn)
+
+    monkeypatch.setattr(users_repo, "count_active_admins", spy)
+    users_repo.update(admin.id, is_active=0, conn=conn)
+
+    assert seen.get("locked") is True

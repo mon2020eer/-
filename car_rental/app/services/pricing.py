@@ -41,16 +41,25 @@ def parse_date(value):
 
 
 def parse_time(value):
-    """يقبل ``time`` أو نصاً بصيغة HH:MM ويُرجع ``time``."""
+    """يقبل ``time`` أو نصاً بصيغة HH:MM ويُرجع ``time``.
+
+    الوقت الغائب يأخذ الافتراضي؛ أمّا الوقت **المشوَّه** فيُرفض ولا يُستبدل
+    صامتاً: استبدالُ «18:7x» بالظهر يجعل عقداً استُلم مساءً يُحتسب من الظهر،
+    فتخرج تسوية الساعات خاطئة بلا أثر يدلّ على سببها.
+    """
     if isinstance(value, datetime.time):
         return value
-    text = str(value or DEFAULT_TIME).strip()
+
+    text = str(value or "").strip()
+    if not text:
+        text = DEFAULT_TIME
+
     for pattern in ("%H:%M:%S", "%H:%M"):
         try:
             return datetime.datetime.strptime(text, pattern).time()
         except ValueError:
             continue
-    return datetime.datetime.strptime(DEFAULT_TIME, "%H:%M").time()
+    raise ValueError("صيغة الوقت غير صحيحة: %s — المتوقَّع ساعة:دقيقة مثل 14:30." % text)
 
 
 def combine(date_value, time_value=None):

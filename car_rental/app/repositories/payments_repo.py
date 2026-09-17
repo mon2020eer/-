@@ -41,23 +41,27 @@ def add(contract_id, amount, method="cash", kind="payment", note=None,
     if kind not in ("deposit", "payment", "refund"):
         raise ValueError("نوع الدفعة غير معروف.")
 
-    contract = db.query_one(
-        "SELECT status FROM contracts WHERE id = ?", (contract_id,), conn=conn
-    )
-    if contract is None:
-        raise ValueError("العقد غير موجود.")
-    if contract["status"] == "cancelled":
-        raise ValueError("لا يمكن تسجيل دفعات على عقد مُلغى.")
-
-    current = balance(contract_id, conn=conn)
-    if kind != "refund" and current and amount > int(current["balance_due"]):
-        raise ValueError(
-            "قيمة الدفعة تتجاوز المتبقّي على العقد. المتبقّي الحالي أقلّ من المبلغ المُدخَل."
-        )
-    if kind == "refund" and current and amount > int(current["paid_amount"]):
-        raise ValueError("قيمة المبلغ المُعاد تتجاوز ما دفعه العميل فعلاً.")
-
+    # الفحص والإدراج تحت قفل الكتابة نفسه: لو قُرئ الرصيد قبل ``BEGIN``
+    # لمرّ اتّصالان من الفحص ذاته ثم أدرجا دفعتيهما بالتتابع، فتجاوز المدفوع
+    # قيمة العقد رغم أن كليهما «تحقّق».
     with db.transaction(conn) as tx:
+        contract = db.query_one(
+            "SELECT status FROM contracts WHERE id = ?", (contract_id,), conn=tx
+        )
+        if contract is None:
+            raise ValueError("العقد غير موجود.")
+        if contract["status"] == "cancelled":
+            raise ValueError("لا يمكن تسجيل دفعات على عقد مُلغى.")
+
+        current = balance(contract_id, conn=tx)
+        if kind != "refund" and current and amount > int(current["balance_due"]):
+            raise ValueError(
+                "قيمة الدفعة تتجاوز المتبقّي على العقد. "
+                "المتبقّي الحالي أقلّ من المبلغ المُدخَل."
+            )
+        if kind == "refund" and current and amount > int(current["paid_amount"]):
+            raise ValueError("قيمة المبلغ المُعاد تتجاوز ما دفعه العميل فعلاً.")
+
         cursor = tx.execute(
             """INSERT INTO payments (contract_id, amount, method, kind, reference,
                                      note, recorded_by, paid_at)

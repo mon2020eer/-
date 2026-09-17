@@ -134,6 +134,19 @@ def revenue_report(start_date, end_date, conn=None):
         default=0,
     )
 
+    # المستحقّات تُجمَع من **عقود الفترة نفسها**، لا بطرح مقبوضاتها منها:
+    # دفعةٌ اليوم على عقد الشهر الماضي ليست من مستحقّات هذا الشهر، وسدادُ عقدِ
+    # هذا الشهر في الشهر القادم لا يجعله اليوم مسدَّداً.
+    outstanding = db.scalar(
+        """SELECT COALESCE(SUM(b.balance_due * c.rate_to_base / ?), 0)
+             FROM contracts c
+             JOIN v_contract_balance b ON b.contract_id = c.id
+            WHERE c.status != 'cancelled' AND c.start_date BETWEEN ? AND ?""",
+        (_RATE, start_date, end_date),
+        conn=conn,
+        default=0,
+    )
+
     maintenance = maintenance_repo.maintenance_cost_total(start_date, end_date, conn=conn)
 
     return {
@@ -144,7 +157,7 @@ def revenue_report(start_date, end_date, conn=None):
         "collected": int(collected),
         "maintenance_cost": int(maintenance),
         "net": int(collected) - int(maintenance),
-        "outstanding": int(contracted) - int(collected),
+        "outstanding": int(outstanding),
     }
 
 

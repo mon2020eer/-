@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """اختبارات محرّك التسعير — وحدة صافية لا تحتاج قاعدة بيانات."""
 
+import datetime
+
 import pytest
 
 from app.services import pricing
@@ -190,3 +192,29 @@ def test_settlement_detects_early_return():
     result = pricing.settlement(contract, "2026-03-03")
     assert result["days"] == 2
     assert result["difference"] == -3 * DAILY
+
+
+# ---------------------------------------------------------------------------
+# الوقت المشوَّه يُرفض ولا يُستبدل صامتاً
+# ---------------------------------------------------------------------------
+def test_blank_time_falls_back_to_the_default():
+    assert pricing.parse_time(None) == datetime.time(12, 0)
+    assert pricing.parse_time("") == datetime.time(12, 0)
+    assert pricing.parse_time("  ") == datetime.time(12, 0)
+
+
+def test_malformed_time_is_refused():
+    """‹18:7x› لا يصير ١٢:٠٠ بلا كلمة.
+
+    الاستبدال الصامت يجعل عقداً استُلم السادسة مساءً يُحتسب من الظهر، فتخرج
+    تسوية الساعات خاطئة ولا أثر يدلّ على السبب. الرفض يُري الخطأ في موضعه.
+    """
+    for bad in ("18:7x", "25:00", "٦:٠٠", "18-30", "abc"):
+        with pytest.raises(ValueError):
+            pricing.parse_time(bad)
+
+
+def test_valid_times_still_parse():
+    assert pricing.parse_time("08:30") == datetime.time(8, 30)
+    assert pricing.parse_time("08:30:15") == datetime.time(8, 30, 15)
+    assert pricing.parse_time(datetime.time(7, 5)) == datetime.time(7, 5)

@@ -185,6 +185,22 @@ def status_counts(conn=None):
     return counts
 
 
+# تُقصّ مسافات الحقول النصّية قبل الفحص والحفظ معاً: رقم اللوحة معرّف فريد،
+# وفحصٌ يقصّ وحفظٌ لا يقصّ يسمح بتسجيل السيارة نفسها مرّتين.
+_TRIMMED_FIELDS = ("plate_number", "brand", "model", "color", "chassis_number",
+                   "insurance_policy_no", "insurance_company")
+
+
+def normalize(data):
+    """نسخة من بيانات السيارة بحقولها النصّية مقصوصة المسافات."""
+    clean = dict(data)
+    for field in _TRIMMED_FIELDS:
+        if field in clean:
+            value = clean[field]
+            clean[field] = value.strip() or None if isinstance(value, str) else value
+    return clean
+
+
 def _validate(data, vehicle_id=None, conn=None):
     for field, label in (
         ("brand", "الماركة"),
@@ -228,6 +244,7 @@ def create(data, conn=None):
                 "للترقية إلى النسخة المتقدّمة راجع مزوّد البرنامج." % limit
             )
 
+    data = normalize(data)
     _validate(data, conn=conn)
 
     with db.transaction(conn) as tx:
@@ -241,9 +258,9 @@ def update(vehicle_id, data, conn=None):
     session.require_login()
     if get(vehicle_id, conn=conn) is None:
         raise ValueError("السيارة غير موجودة.")
+    data = normalize(data)
     _validate(data, vehicle_id=vehicle_id, conn=conn)
 
-    data = dict(data)
     # أعمدة لها قيمة افتراضية ولا تقبل NULL: تُضبط صراحةً عند التعديل
     data["weekly_rate"] = int(data.get("weekly_rate") or 0)
     data["odometer"] = int(data.get("odometer") or 0)

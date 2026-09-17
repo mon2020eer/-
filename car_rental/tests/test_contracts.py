@@ -564,3 +564,159 @@ def test_multi_currency_reporting_uses_contract_rate(conn, admin, sample_custome
     # تعديل سعر الصرف لاحقاً لا يغيّر تقرير العقد القديم
     settings_repo.set_exchange_rate("USD", 9.0, conn=conn)
     assert reporting.revenue_report(start, end, conn=conn)["contracted"] == 55000
+
+
+# ---------------------------------------------------------------------------
+# مزامنة حالة السيارة: الحالة تُشتقّ من العقود لا تُفرض إدخالاً
+# ---------------------------------------------------------------------------
+def test_cancelling_a_future_booking_keeps_the_rented_vehicle_rented(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """إلغاء حجز قادم لا يجوز أن يُحرّر سيارةً في يد عميل اليوم.
+
+    السيارة الواحدة تحمل عقداً جارياً وحجوزات قادمة معاً منذ أُتيح الحجز
+    المسبق. فإن حرّر إلغاءُ الحجز السيارةَ، عرضتها المنظومة «متاحة» وهي
+    مؤجَّرة فعلاً — وهذا طريق التأجير المزدوج.
+    """
+    today = datetime.date.today()
+    rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=2)).isoformat(),
+        conn=conn,
+    )
+    booking_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        (today + datetime.timedelta(days=5)).isoformat(),
+        (today + datetime.timedelta(days=7)).isoformat(),
+        conn=conn,
+    )
+
+    rental_service.cancel_contract(booking_id, reason="اعتذر العميل", conn=conn)
+
+    assert vehicles_repo.get(sample_vehicle, conn=conn)["status"] == "rented"
+
+
+def test_cancelling_the_only_contract_frees_the_vehicle(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """وفي المقابل: إلغاء العقد الوحيد يُرجع السيارة متاحة كما ينبغي."""
+    start, end = _dates(2)
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, start, end, conn=conn
+    )
+
+    rental_service.cancel_contract(contract_id, conn=conn)
+
+    assert vehicles_repo.get(sample_vehicle, conn=conn)["status"] == "available"
+
+
+def test_extending_a_contract_resynchronizes_vehicle_status(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """التمديد يعيد اشتقاق حالة السيارة بدل أن يتركها على حالها القديم.
+
+    الحالة تنحرف بمرور الوقت وحده — حجز الغد يصير إيجار اليوم والتطبيق مغلق —
+    فكل عملية تمسّ مدّة العقد موضعُ إعادة اشتقاق.
+    """
+    start, end = _dates(2)
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, start, end, conn=conn
+    )
+    db.execute(
+        "UPDATE vehicles SET status = 'available' WHERE id = ?",
+        (sample_vehicle,), conn=conn,
+    )
+
+    rental_service.extend_contract(
+        contract_id,
+        (datetime.date.today() + datetime.timedelta(days=6)).isoformat(),
+        conn=conn,
+    )
+
+    assert vehicles_repo.get(sample_vehicle, conn=conn)["status"] == "rented"
+
+
+# ---------------------------------------------------------------------------
+# المستحقّات: من عقود الفترة نفسها لا من طرح دفعات فترة أخرى
+# ---------------------------------------------------------------------------
+def test_outstanding_counts_only_the_period_contracts(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """دفعة داخل الفترة على عقد أقدم لا تُنقص مستحقّات الفترة.
+
+    ‹المستحقّات› جواب سؤال «كم لي عند الناس من عقود هذا الشهر؟» — وطرحُ
+    مقبوضات الشهر من تعاقداته يخلط مجموعتين مختلفتين، فيخرج رقم لا يصف شيئاً.
+    """
+    from app.services import reporting
+
+    today = datetime.date.today()
+    old_start = today - datetime.timedelta(days=40)
+    old_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        old_start.isoformat(), (old_start + datetime.timedelta(days=2)).isoformat(),
+        conn=conn,
+    )
+    rental_service.close_contract(
+        old_id, (old_start + datetime.timedelta(days=2)).isoformat(), conn=conn
+    )
+
+    period_start = (today - datetime.timedelta(days=3)).isoformat()
+    new_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        period_start, (today + datetime.timedelta(days=1)).isoformat(),
+        conn=conn,
+    )
+    period_total = contracts_repo.get(new_id, conn=conn)["total_amount"]
+
+    # سداد العقد القديم اليوم — داخل فترة التقرير، وخارج عقودها
+    payments_repo.add(old_id, 10000, conn=conn)
+
+    report = reporting.revenue_report(
+        period_start, (today + datetime.timedelta(days=1)).isoformat(), conn=conn
+    )
+    assert report["outstanding"] == period_total
+
+
+def test_outstanding_drops_when_the_period_contract_is_paid(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """وتسديدُ عقد الفترة يُنقص مستحقّاتها — وإلّا لم يكن الرقم يقيس شيئاً."""
+    from app.services import reporting
+
+    start, end = _dates(2)
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, start, end, conn=conn
+    )
+    total = contracts_repo.get(contract_id, conn=conn)["total_amount"]
+    payments_repo.add(contract_id, 10000, conn=conn)
+
+    assert reporting.revenue_report(start, end, conn=conn)["outstanding"] == total - 10000
+
+
+# ---------------------------------------------------------------------------
+# فحص الرصيد تحت قفل الكتابة
+# ---------------------------------------------------------------------------
+def test_payment_balance_check_runs_inside_the_write_transaction(
+    conn, admin, sample_customer, sample_vehicle, monkeypatch
+):
+    """التحقّق من المتبقّي يجري داخل المعاملة لا قبلها.
+
+    لو جرى قبلها لمرّ اتّصالان من الفحص نفسه ثم أدرجا دفعتين متعاقبتين،
+    فتجاوز المدفوع قيمة العقد رغم أن كليهما ‹تحقّق›.
+    """
+    start, end = _dates(2)
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, start, end, conn=conn
+    )
+
+    seen = {}
+    original = payments_repo.balance
+
+    def spy(contract, conn=None):
+        seen["locked"] = bool(conn is not None and conn.in_transaction)
+        return original(contract, conn=conn)
+
+    monkeypatch.setattr(payments_repo, "balance", spy)
+    payments_repo.add(contract_id, 5000, conn=conn)
+
+    assert seen.get("locked") is True

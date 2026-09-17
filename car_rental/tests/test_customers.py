@@ -192,3 +192,61 @@ def test_incomplete_customer_does_not_break_search_rows(conn, admin):
     customers_repo.create({"full_name": "زبون عابر"}, conn=conn)
     rows = customers_repo.search(conn=conn)
     assert any(customers_repo.is_incomplete(row) for row in rows)
+
+
+# ---------------------------------------------------------------------------
+# تطبيع المعرّفات الفريدة
+# ---------------------------------------------------------------------------
+def test_whitespace_around_national_id_does_not_create_a_duplicate(conn, admin):
+    """‹١١٩٨٧٦› و‹ ١١٩٨٧٦ › عميل واحد لا عميلان.
+
+    الفحص كان يقصّ المسافات والحفظ يُبقيها، فيمرّ الرقم نفسه مرّتين ويظهر
+    للمكتب عميلان لشخص واحد — وهو أسوأ من الرفض، لأن الخطأ لا يُكتشف إلّا
+    بعد أن تتفرّق عقوده بين ملفّين.
+    """
+    customers_repo.create(
+        {"full_name": "سالم التلاتي", "national_id": "  119876543210  "}, conn=conn
+    )
+
+    with pytest.raises(ValueError) as error:
+        customers_repo.create(
+            {"full_name": "سالم التلاتي", "national_id": "119876543210"}, conn=conn
+        )
+    assert "نفس رقم الجواز" in str(error.value)
+
+
+def test_customer_identifiers_are_stored_trimmed(conn, admin):
+    customer_id = customers_repo.create(
+        {"full_name": "  فرج المبروك  ", "national_id": " 777888 ",
+         "license_number": " LC-77 ", "phone": " 0913333333 "},
+        conn=conn,
+    )
+    row = customers_repo.get(customer_id, conn=conn)
+    assert row["full_name"] == "فرج المبروك"
+    assert row["national_id"] == "777888"
+    assert row["license_number"] == "LC-77"
+    assert row["phone"] == "0913333333"
+
+
+def test_whitespace_around_plate_number_does_not_create_a_duplicate(conn, admin):
+    from app.repositories import vehicles_repo
+
+    data = {"brand": "كيا", "model": "ريو", "year": 2021, "plate_number": "7-54321",
+            "color": "أزرق", "daily_rate": 12000, "weekly_rate": 0,
+            "currency_code": "LYD"}
+    vehicles_repo.create(dict(data, plate_number="  7-54321  "), conn=conn)
+
+    with pytest.raises(ValueError) as error:
+        vehicles_repo.create(dict(data), conn=conn)
+    assert "نفس رقم اللوحة" in str(error.value)
+
+
+def test_plate_number_is_stored_trimmed(conn, admin):
+    from app.repositories import vehicles_repo
+
+    vehicle_id = vehicles_repo.create(
+        {"brand": "هوندا", "model": "سيفيك", "year": 2020, "plate_number": " 8-1234 ",
+         "color": "أسود", "daily_rate": 11000, "weekly_rate": 0, "currency_code": "LYD"},
+        conn=conn,
+    )
+    assert vehicles_repo.get(vehicle_id, conn=conn)["plate_number"] == "8-1234"

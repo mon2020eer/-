@@ -150,16 +150,10 @@ def create(username, full_name, password, role, phone=None, conn=None):
 @session.requires_role("admin")
 def update(user_id, full_name=None, role=None, phone=None, is_active=None, conn=None):
     """يعدّل بيانات مستخدم — للمدير فقط."""
-    row = get(user_id, conn=conn)
-    if row is None:
-        raise ValueError("المستخدم غير موجود.")
-
-    # حماية جوهرية: لا يجوز أن تفقد المنظومة آخر مدير فعّال
-    losing_admin = (role is not None and role != "admin" and row["role"] == "admin") or (
-        is_active == 0 and row["role"] == "admin"
-    )
-    if losing_admin and count_active_admins(conn=conn) <= 1:
-        raise ValueError("لا يمكن تعطيل آخر حساب مدير في المنظومة.")
+    # إدارة المستخدمين (الصلاحية والتفعيل) ميزةُ النسخة المتقدّمة. أمّا تصحيح
+    # اسم الحساب أو هاتفه فيبقى متاحاً لصاحب الحساب الواحد في الأساسية.
+    if role is not None or is_active is not None:
+        features.require("multi_user")
 
     fields, params = [], []
     for column, value in (
@@ -176,7 +170,22 @@ def update(user_id, full_name=None, role=None, phone=None, is_active=None, conn=
         return False
 
     params.append(user_id)
+    # القراءة والفحص والتعديل تحت قفل الكتابة نفسه: لو قُرئ العدد قبل ``BEGIN``
+    # لرأى مديران متزامنان مديرَين فعّالين ثم عطّل كلٌّ منهما الآخر، فبقيت
+    # المنظومة بلا مدير — وهي حالة لا تُصلَح من داخل التطبيق.
     with db.transaction(conn) as tx:
+        row = get(user_id, conn=tx)
+        if row is None:
+            raise ValueError("المستخدم غير موجود.")
+
+        # حماية جوهرية: لا يجوز أن تفقد المنظومة آخر مدير فعّال
+        losing_admin = (
+            (role is not None and role != "admin" and row["role"] == "admin")
+            or (is_active == 0 and row["role"] == "admin")
+        )
+        if losing_admin and count_active_admins(conn=tx) <= 1:
+            raise ValueError("لا يمكن تعطيل آخر حساب مدير في المنظومة.")
+
         tx.execute("UPDATE users SET %s WHERE id = ?" % ", ".join(fields), params)
         audit.log("update", "user", user_id, {"fields": fields}, conn=tx)
     return True

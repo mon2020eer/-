@@ -109,6 +109,23 @@ def is_incomplete(row):
     return bool(missing_fields(row))
 
 
+# الحقول النصّية التي تُقصّ مسافاتها قبل الفحص والحفظ معاً. المعرّفات منها
+# خاصّةً: فحصٌ يقصّ وحفظٌ لا يقصّ يجعل « 119876 » و«119876» عميلين لشخص واحد،
+# فيتفرّق سجلّه بين ملفّين ولا يُكتشف الخطأ إلّا بعد فوات وقته.
+_TRIMMED_FIELDS = ("full_name", "national_id", "license_number", "phone",
+                   "nationality", "address")
+
+
+def normalize(data):
+    """نسخة من بيانات العميل بحقولها النصّية مقصوصة المسافات."""
+    clean = dict(data)
+    for field in _TRIMMED_FIELDS:
+        if field in clean:
+            value = clean[field]
+            clean[field] = value.strip() or None if isinstance(value, str) else value
+    return clean
+
+
 def _validate(data, customer_id=None, conn=None):
     """يتحقّق من الحدّ الأدنى فقط.
 
@@ -135,6 +152,7 @@ def _validate(data, customer_id=None, conn=None):
 def create(data, conn=None):
     session.require_login()
     features.require("customers")
+    data = normalize(data)
     _validate(data, conn=conn)
 
     with db.transaction(conn) as tx:
@@ -148,9 +166,9 @@ def update(customer_id, data, conn=None):
     session.require_login()
     if get(customer_id, conn=conn) is None:
         raise ValueError("العميل غير موجود.")
+    data = normalize(data)
     _validate(data, customer_id=customer_id, conn=conn)
 
-    data = dict(data)
     data["is_blacklisted"] = int(data.get("is_blacklisted") or 0)
 
     with db.transaction(conn) as tx:
