@@ -84,12 +84,22 @@ def _show_error_box(text):
         return False
 
 
-def _report_fatal(summary, detail=""):
-    """يوصل خطأ إقلاع قاتلاً إلى المستخدم مهما كانت صورة التشغيل."""
+def _report_fatal(summary, detail="", show_dialog=True):
+    """يوصل خطأ إقلاع قاتلاً إلى المستخدم مهما كانت صورة التشغيل.
+
+    ``show_dialog=False`` في الأوضاع **غير التفاعلية** (`--backup-now` مهمّةً
+    مجدولة، و`--self-test` في خادم البناء): `QMessageBox.exec()` تحجز الخيط
+    حتى يضغط أحدٌ «موافق»، ولا أحد أمام الجهاز ليلاً. فتبقى العملية معلَّقة،
+    وتتعطّل معها كل نسخة تالية — فيكتشف المكتب أن نسخه توقّفت منذ أسابيع يوم
+    يحتاجها. والمجرى والسجلّ يبقيان عاملين في الحالتين، فلا يضيع الخبر.
+    """
     full = summary if not detail else "%s\n\n%s" % (summary, detail)
 
     _err(full + "\n")
     log_path = _log(full)
+
+    if not show_dialog:
+        return
 
     message = summary
     if log_path is not None:
@@ -210,7 +220,7 @@ def run_backup():
     try:
         result = backup_service.run_backup(mode="auto")
     except Exception as error:
-        _report_fatal("فشل النسخ الاحتياطي: %s" % error)
+        _report_fatal("فشل النسخ الاحتياطي: %s" % error, show_dialog=False)
         return 1
 
     _out("تمت النسخة الاحتياطية: %s\n" % result.get("file_name"))
@@ -226,11 +236,14 @@ def main(argv=None):
         _out("%s — الإصدار %s\n" % (config.APP_TITLE_AR, config.APP_VERSION))
         return 0
 
+    # الأوضاع غير التفاعلية لا يقف أمامها أحد ليغلق نافذة
+    interactive = not (args.backup_now or args.self_test)
+
     try:
         _bootstrap(args.data_dir)
     except Exception as error:
         _report_fatal("تعذّرت تهيئة قاعدة البيانات:\n%s" % error,
-                      traceback.format_exc())
+                      traceback.format_exc(), show_dialog=interactive)
         return 1
 
     if args.backup_now:

@@ -68,10 +68,12 @@ def test_python_tools_are_called_through_the_interpreter(path, comment_prefix):
 @pytest.mark.parametrize("path", [BUILD_SCRIPT, INSTALLER],
                          ids=["build_exe.ps1", "installer.iss"])
 def test_windows_files_keep_their_utf8_bom(path):
-    """بلا علامة BOM يقرأ PowerShell العربي الملفَّ بترميز CP1256.
+    """بلا علامة BOM يقرأ PowerShell 5.1 الملفَّ بصفحة ترميز النظام لا UTF-8.
 
+    وهي تختلف بلغة الجهاز — `CP1256` على نظام عربي و`CP1252` على `en-US` —
     فتتحوّل الشدّة والشرطة الطويلة إلى علامات اقتباس ذكية، فينهار تحليل الملف
-    برسالة «Missing closing '}'» التي لا تدلّ على السبب إطلاقاً.
+    برسالة «Missing closing '}'» التي لا تدلّ على السبب إطلاقاً. والعلامة
+    تُنهي المسألة مهما كانت لغة الجهاز.
     """
     assert path.exists(), path
     assert path.read_bytes()[:3] == b"\xef\xbb\xbf", (

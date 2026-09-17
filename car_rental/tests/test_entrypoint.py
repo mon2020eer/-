@@ -142,3 +142,75 @@ def test_write_helpers_survive_a_broken_stream(monkeypatch):
 
     monkeypatch.setattr(sys, "stdout", Broken())
     assert entry._out("نصّ") is False
+
+
+# ---------------------------------------------------------------------------
+# المهمّة المجدولة لا تنتظر إنساناً
+# ---------------------------------------------------------------------------
+def test_scheduled_backup_failure_does_not_open_a_modal_dialog(app_home, monkeypatch):
+    """`--backup-now` مهمّة مجدولة: نافذةٌ فيها تنتظر نقرةً لا تأتي.
+
+    `QMessageBox.exec()` تحجز الخيط حتى يضغط أحدٌ «موافق»، ولا أحد أمام
+    الجهاز ليلاً. فتبقى العملية معلَّقة، **وتتعطّل معها كل نسخة تالية** —
+    فيكتشف المكتب أن نسخه توقّفت منذ أسابيع يوم يحتاجها.
+    """
+    from app import __main__ as entry
+
+    shown = []
+    monkeypatch.setattr(entry, "_show_error_box", lambda text: shown.append(text))
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("قاعدة البيانات مقفلة")
+
+    monkeypatch.setattr(entry, "_bootstrap", explode)
+
+    assert entry.main(["--backup-now"]) == 1
+    assert shown == [], "فُتحت نافذة في وضع غير تفاعلي"
+
+
+def test_scheduled_backup_failure_still_reaches_the_log(app_home, monkeypatch):
+    """ويبقى السبب مكتوباً: المنعُ للنافذة وحدها لا للتبليغ."""
+    from app import config
+    from app import __main__ as entry
+
+    def failing_backup(*args, **kwargs):
+        raise RuntimeError("انقطع الاتصال بـ Drive")
+
+    from app.services.backup import backup_service
+
+    monkeypatch.setattr(backup_service, "run_backup", failing_backup)
+    monkeypatch.setattr(entry, "_show_error_box",
+                        lambda text: pytest.fail("فُتحت نافذة في وضع غير تفاعلي"))
+
+    assert entry.main(["--backup-now"]) == 1
+    assert "انقطع الاتصال بـ Drive" in config.LOG_PATH.read_text(encoding="utf-8")
+
+
+def test_self_test_does_not_open_a_modal_dialog(app_home, monkeypatch):
+    """و`--self-test` كذلك: يعمل في خوادم البناء بلا إنسان أمامها."""
+    from app import __main__ as entry
+
+    monkeypatch.setattr(entry, "_show_error_box",
+                        lambda text: pytest.fail("فُتحت نافذة في وضع غير تفاعلي"))
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("قاعدة البيانات مقفلة")
+
+    monkeypatch.setattr(entry, "_bootstrap", explode)
+    assert entry.main(["--self-test"]) == 1
+
+
+def test_interactive_startup_still_shows_the_dialog(app_home, monkeypatch):
+    """أمّا التشغيل العادي فالنافذة فيه هي القناة الوحيدة: لا مجرى ولا سجلّ يُقرأ."""
+    from app import __main__ as entry
+
+    shown = []
+    monkeypatch.setattr(entry, "_show_error_box", lambda text: shown.append(text))
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("قاعدة البيانات مقفلة")
+
+    monkeypatch.setattr(entry, "_bootstrap", explode)
+
+    assert entry.main([]) == 1
+    assert shown, "لم تظهر نافذة الخطأ في التشغيل التفاعلي"
