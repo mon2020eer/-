@@ -3,13 +3,17 @@ __pycache__/
 .env
 venv/
 .venv/
+.pytest_cache/
 
-# --- منظومة إدارة مكتب إيجار السيارات ---
-car_rental/build/dist/
-car_rental/build/work/
-car_rental/build/installer/
-car_rental/.venv/
-car_rental/.pytest_cache/
+# --- مخرجات البناء ---
+# المسارات **بلا بادئة مجلد**: كان مكتوباً `car_rental/build/dist/` حين كان
+# التطبيق في مجلد فرعي، فلمّا نُقل إلى الجذر ماتت القاعدة بصمت وصار ملف
+# ويندوز التنفيذي (عشرات الميغابايتات) مرشَّحاً للإيداع.
+build/dist/
+build/work/
+build/installer/
+
+# --- بيانات التشغيل ---
 *.db
 *.db-wal
 *.db-shm
@@ -17,7 +21,8 @@ car_rental/.pytest_cache/
 credentials.json
 token.json
 
-# أسرار الترخيص — لا تُودَع في المستودع أبداً
+# --- أسرار الترخيص — لا تُودَع في المستودع أبداً ---
 *.license_private.key
 .car_rental_license_private.key
-car_rental/tools/issued_licenses.jsonl
+# سجلّ المفاتيح المُصدَرة: فيه مفاتيح العملاء وأسماء مكاتبهم وتواريخ اشتراكهم
+tools/issued_licenses.jsonl

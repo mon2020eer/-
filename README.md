@@ -53,7 +53,6 @@
 ## 🚀 التشغيل السريع (للمطوّر)
 
 ```bash
-cd car_rental
 python -m pip install -r requirements.txt
 python -m app
 ```
@@ -127,13 +126,13 @@ powershell -ExecutionPolicy Bypass -File build\build_exe.ps1
 ## 🧱 البنية
 
 ```
-car_rental/
+.
 ├─ app/
 │  ├─ core/          قاعدة البيانات، التعمية، الجلسة، المال، الترخيص والمزايا
 │  ├─ repositories/  قراءة وكتابة الكيانات
 │  ├─ services/      التسعير، العقود، PDF، قوالب الطباعة، التنبيهات، الاشتراك
 │  └─ ui/            واجهة PyQt6 العربية (RTL)
-├─ tests/            ٢٦٢ اختباراً: منطق + تكامل + ترقية + ترخيص + قوالب + واجهة
+├─ tests/            ٢٧٥ اختباراً: منطق + تكامل + ترقية + ترخيص + قوالب + واجهة
 ├─ tools/            أداة المالك لتوليد مفاتيح الاشتراك (لا تُوزَّع مع التطبيق)
 ├─ build/            ملف PyInstaller وسكربت البناء ومثبّت Inno Setup
 └─ docs/             الأدلّة العربية

@@ -16,7 +16,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = ROOT / "build" / "build_exe.ps1"
 INSTALLER = ROOT / "build" / "installer.iss"
-WORKFLOW = ROOT.parent / ".github" / "workflows" / "car-rental.yml"
+WORKFLOW = ROOT / ".github" / "workflows" / "car-rental.yml"
 
 # أدوات بايثون التي يضعها pip في مجلد Scripts. وجود ذلك المجلد في PATH ليس
 # مضموناً على أجهزة المستخدمين، فتُنادى بـ ``python -m`` دائماً.
@@ -50,8 +50,7 @@ def test_python_tools_are_called_through_the_interpreter(path, comment_prefix):
     جهاز لا يضع مجلد Scripts في PATH — وقد وقع ذلك فعلاً عند المالك. أمّا
     `python -m PyInstaller` فيستعمل المفسّر نفسه الذي ثُبّتت فيه الحزمة.
     """
-    if not path.exists():
-        pytest.skip("الملف غير موجود في هذا السياق: %s" % path)
+    assert path.exists(), "ملف مفقود: %s" % path
 
     offenders = [
         "%s:%d: %s" % (path.name, number, line.strip())
@@ -62,6 +61,23 @@ def test_python_tools_are_called_through_the_interpreter(path, comment_prefix):
     assert not offenders, (
         "نداءات بأسماء مجرَّدة — استعمل python -m بدلها:\n  "
         + "\n  ".join(offenders)
+    )
+
+
+def test_the_ci_workflow_exists():
+    """سير العمل الآلي موجود — وغيابه عطبٌ لا «سياقٌ مختلف».
+
+    كان هذا الحارس يتخطّى نفسه بـ``pytest.skip`` حين لا يجد الملف، فحُذف سير
+    العمل كلّه في إعادة ترتيب المستودع ومرّت الاختبارات خضراء — بلا اختبارات
+    على GitHub ولا بناء لملف ويندوز التنفيذي، ولا كلمة تدلّ على ذلك.
+
+    وهذا هو المبدأ نفسه المتّبع في كل حارس هنا: **حارسٌ لا يسقط على العطب ليس
+    حارساً**. والتخطّي الصامت أسوأ من غياب الحارس، لأنه يشتري طمأنينةً كاذبة.
+    """
+    assert WORKFLOW.is_file(), (
+        "سير العمل الآلي مفقود: %s\n"
+        "بلا هذا الملف لا تُشغَّل الاختبارات على GitHub ولا يُبنى ملف "
+        "ويندوز التنفيذي." % WORKFLOW
     )
 
 
@@ -149,3 +165,50 @@ def test_launcher_has_no_relative_imports():
         assert not stripped.startswith("from ."), (
             "استيراد نسبي في نقطة الدخول — run.py:%d: %s" % (number, stripped)
         )
+
+
+# ---------------------------------------------------------------------------
+# قواعد التجاهل: قاعدةٌ ماتت بصمت تكشف سرّاً
+# ---------------------------------------------------------------------------
+# مسارات لا يجوز أن تصل إلى المستودع، ولكلٍّ سببه. تُفحص بـ``git check-ignore``
+# لا بقراءة نصّ `.gitignore`: القاعدة قد تكون مكتوبة وصحيحة الإملاء ولا تنطبق
+# على شيء — وهذا ما وقع فعلاً حين نُقل التطبيق من `car_rental/` إلى الجذر،
+# فبقيت القواعد تقول `car_rental/tools/issued_licenses.jsonl` وهو مسار لم يعد
+# موجوداً. فماتت الحماية بلا رسالة، والملفات التي تحرسها صارت مرشَّحة للإيداع.
+MUST_BE_IGNORED = {
+    "tools/issued_licenses.jsonl":
+        "سجلّ المفاتيح المُصدَرة: مفاتيح العملاء وأسماء مكاتبهم",
+    "car_rental.db":
+        "قاعدة بيانات المكتب: كل عملائه وعقوده",
+    "credentials.json":
+        "بيانات اعتماد Google",
+    "token.json":
+        "رمز ربط حساب Google",
+    ".car_rental_license_private.key":
+        "المفتاح الخاص للتوقيع — من يملكه يزوّر كل الاشتراكات",
+    "build/dist/CarRentalOffice/CarRentalOffice.exe":
+        "مخرجات البناء: عشرات الميغابايتات",
+    "build/work/x.toc":
+        "ملفات PyInstaller المؤقّتة",
+    "build/installer/setup.exe":
+        "مخرجات المثبّت",
+}
+
+
+@pytest.mark.parametrize("path", sorted(MUST_BE_IGNORED),
+                         ids=sorted(MUST_BE_IGNORED))
+def test_sensitive_paths_are_really_ignored(path):
+    """`git check-ignore` هو الحكم، لا وجود سطرٍ في الملف.
+
+    الفارق جوهري: السطر قد يبقى مكتوباً وقد مات مفعوله — بادئة مجلد تغيّرت
+    مثلاً — فيقرأ القارئ حمايةً لا وجود لها.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", path],
+        cwd=str(ROOT), capture_output=True,
+    )
+    assert result.returncode == 0, (
+        "%s ليس متجاهَلاً في .gitignore — %s" % (path, MUST_BE_IGNORED[path])
+    )

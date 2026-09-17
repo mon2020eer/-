@@ -40,7 +40,7 @@
 
 ### التنفيذ
 
-افتح PowerShell في مجلد `car_rental` ونفّذ:
+افتح PowerShell في **جذر المستودع** ونفّذ:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build\build_exe.ps1

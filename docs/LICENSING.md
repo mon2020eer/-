@@ -41,7 +41,6 @@ CR-<الحمولة>.<التوقيع>
 </div>
 
 ```bash
-cd car_rental
 python tools/license_tool.py --init
 ```
 
