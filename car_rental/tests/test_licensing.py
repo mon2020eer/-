@@ -7,6 +7,7 @@
 
 import base64
 import datetime
+import pathlib
 
 import pytest
 
@@ -260,3 +261,107 @@ def test_transfer_removes_the_key(conn, admin, keypair, monkeypatch):
 
     assert subscription.saved_key(conn=conn) == ""
     assert features.current_tier() == features.TIER_LOCKED
+
+
+# ---------------------------------------------------------------------------
+# بصمة الجهاز: ثابتة ما ثبت المعرّف الأقوى
+# ---------------------------------------------------------------------------
+def test_fingerprint_ignores_hostname_and_mac_when_a_stable_id_exists(monkeypatch):
+    """تغيير اسم الحاسوب أو بطاقة الشبكة لا يُبطل ترخيصاً صحيحاً.
+
+    مزجُ المعرّفات كلّها كان يجعل أي تغيير عارض — اسم جهاز يُصحَّح، بطاقة
+    شبكة تُستبدل — يبطل مفتاح عميل دافع، فيُحرَم من برنامجه بلا ذنب.
+    """
+    monkeypatch.setattr(licensing.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(licensing, "_linux_machine_id", lambda: "STABLE-ID-123")
+
+    monkeypatch.setattr(licensing.platform, "node", lambda: "OFFICE-PC")
+    monkeypatch.setattr(licensing.uuid, "getnode", lambda: 111111111111)
+    first = licensing.machine_fingerprint()
+
+    monkeypatch.setattr(licensing.platform, "node", lambda: "MAKTAB-2")
+    monkeypatch.setattr(licensing.uuid, "getnode", lambda: 999999999999)
+    assert licensing.machine_fingerprint() == first
+
+
+def test_fingerprint_falls_back_when_no_stable_id_is_available(monkeypatch):
+    """وعند غياب المعرّف الثابت تُستعمل المصادر المتغيّرة بديلاً لا مزيجاً."""
+    monkeypatch.setattr(licensing.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(licensing, "_linux_machine_id", lambda: None)
+    monkeypatch.setattr(licensing.platform, "node", lambda: "PC-A")
+    monkeypatch.setattr(licensing.uuid, "getnode", lambda: 111111111111)
+    first = licensing.machine_fingerprint()
+
+    monkeypatch.setattr(licensing.platform, "node", lambda: "PC-B")
+    second = licensing.machine_fingerprint()
+
+    assert first and second and first != second
+
+
+def test_fingerprint_keeps_its_readable_shape(monkeypatch):
+    monkeypatch.setattr(licensing, "_linux_machine_id", lambda: "STABLE-ID-123")
+    monkeypatch.setattr(licensing.platform, "system", lambda: "Linux")
+    fingerprint = licensing.machine_fingerprint()
+    assert len(fingerprint) == 19 and fingerprint.count("-") == 3
+
+
+# ---------------------------------------------------------------------------
+# التجربة مربوطة بالجهاز لا بقاعدة البيانات
+# ---------------------------------------------------------------------------
+def test_a_fresh_database_does_not_grant_a_second_trial(conn, admin, app_home):
+    """قاعدة بيانات جديدة لا تعيد فتح التجربة على الجهاز نفسه.
+
+    ``--data-dir`` و``CAR_RENTAL_HOME`` يختاران قاعدةً أخرى، فلو كان الوسم في
+    القاعدة وحدها لكانت «تجربة واحدة لكل جهاز» عبارةً بلا مقابل: تجربة جديدة
+    بأمر واحد وبلا حدّ.
+    """
+    subscription.start_trial(features.TIER_PRO, conn=conn)
+
+    # محاكاة قاعدة جديدة: الإعدادات فارغة، والوسم في مجلد المستخدم كما هو
+    from app.core import db
+
+    db.execute("DELETE FROM app_settings WHERE key IN (?, ?, ?)",
+               (subscription.KEY_TRIAL_START, subscription.KEY_TRIAL_TIER,
+                subscription.KEY_LAST_SEEN), conn=conn)
+
+    with pytest.raises(licensing.LicenseError) as error:
+        subscription.start_trial(features.TIER_PRO, conn=conn)
+    assert "سبق استعمال الفترة التجريبية" in str(error.value)
+
+
+def test_the_trial_resumes_from_its_original_start_date(conn, admin, app_home):
+    """وتستأنف التجربة من تاريخ بدايتها الأوّل لا من يوم القاعدة الجديدة."""
+    from app.core import db
+
+    started = datetime.date.today() - datetime.timedelta(days=5)
+    subscription.start_trial(features.TIER_PRO, conn=conn, today=started)
+    db.execute("DELETE FROM app_settings WHERE key IN (?, ?)",
+               (subscription.KEY_TRIAL_START, subscription.KEY_TRIAL_TIER), conn=conn)
+
+    result = subscription.status(conn=conn)
+    assert result.state == "trial"
+    assert result.days_left == licensing.TRIAL_DAYS - 5
+
+
+def test_a_marker_from_another_device_is_ignored(conn, admin, app_home, monkeypatch):
+    """وسمٌ وصل من جهاز آخر لا يحرم هذا الجهاز من تجربته."""
+    import json
+
+    subscription._trial_marker_path().write_text(
+        json.dumps({"fingerprint": "GHAYR-HADHA-ALJIHAZ",
+                    "started": datetime.date.today().isoformat(), "tier": "pro"}),
+        encoding="utf-8",
+    )
+
+    result = subscription.start_trial(features.TIER_BASIC, conn=conn)
+    assert result.state == "trial"
+
+
+def test_trial_starts_even_when_the_marker_cannot_be_written(conn, admin, monkeypatch):
+    """تعذّر كتابة الوسم لا يمنع التجربة: الحماية للمالك والخدمة للعميل."""
+    monkeypatch.setattr(
+        subscription, "_trial_marker_path",
+        lambda: pathlib.Path("/lا-yujad/hadha-almasar/.car_rental_trial"),
+    )
+    result = subscription.start_trial(features.TIER_BASIC, conn=conn)
+    assert result.state == "trial"

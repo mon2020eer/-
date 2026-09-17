@@ -153,11 +153,16 @@ class MainWindow(QMainWindow):
         for label, page_class, roles, feature in entries:
             if self.user.role not in roles:
                 continue
-            # صفحة خارج النسخة الحالية لا تُبنى أصلاً: لا مساحة ولا زمن إقلاع
-            if feature and not features.has_feature(feature):
+            # صفحة خارج النسخة الحالية لا تُبنى أصلاً: لا مساحة ولا زمن إقلاع.
+            # أمّا في وضع القفل فصفحات البيانات تُبنى للقراءة — بيانات المكتب
+            # ملك صاحبه، والقفل يمنع العمل الجديد لا يحجب الماضي.
+            if feature and not features.can_view(feature):
                 continue
 
             page = page_class(self)
+            if feature and not features.has_feature(feature):
+                if hasattr(page, "set_read_only"):
+                    page.set_read_only(True)
             index = self.stack.addWidget(page)
             self._pages.append(page)
 

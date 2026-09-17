@@ -198,3 +198,55 @@ def test_unknown_tier_is_refused():
     with pytest.raises(ValueError):
         features.set_tier("gold")
     assert features.current_tier() == features.TIER_PRO
+
+
+# ---------------------------------------------------------------------------
+# القفل يمنع العمل الجديد ولا يحجب البيانات
+# ---------------------------------------------------------------------------
+def test_locked_tier_can_still_view_the_entity_pages():
+    """صفحات العملاء والسيارات والعقود تُعرض في القفل وإن مُنع التعديل فيها.
+
+    الأسماء نفسها كانت تحكم الصلاحية وإظهار الصفحة معاً، فحجبُ التعديل كان
+    يحجب البيانات — وهو نقضٌ لما وُعد به صاحب المكتب: بياناته ملكه.
+    """
+    features.set_tier(features.TIER_LOCKED)
+    for name in ("customers", "vehicles", "contracts", "payments"):
+        assert not features.has_feature(name), name      # التعديل ممنوع
+        assert features.can_view(name), name             # والعرض متاح
+
+
+def test_locked_tier_still_hides_premium_pages():
+    """والقفل لا يفتح ما لم يكن مفتوحاً: التقارير والسحابة تبقى محجوبة."""
+    features.set_tier(features.TIER_LOCKED)
+    for name in ("reports", "cloud_backup", "maintenance", "alerts", "multi_user"):
+        assert not features.can_view(name), name
+
+
+def test_can_view_follows_the_tier_when_not_locked():
+    features.set_tier(features.TIER_BASIC)
+    assert features.can_view("customers")
+    assert not features.can_view("reports")
+    features.set_tier(features.TIER_PRO)
+    assert features.can_view("reports")
+
+
+def test_basic_cannot_close_a_maintenance_record(conn, admin, sample_vehicle):
+    """فرضُ الميزة يشمل **إغلاق** الصيانة لا فتحها وحده.
+
+    فتحُها كان محميّاً وإغلاقها مكشوفاً، فيبقى طريقٌ يعدّل بيانات ميزةٍ خارج
+    النسخة بنداء مباشر — والمنع في طبقة الخدمة لا في إخفاء الأزرار.
+    """
+    record_id = maintenance_repo.open_maintenance(sample_vehicle, "تغيير زيت", conn=conn)
+    violation_id = maintenance_repo.add_violation(
+        sample_vehicle, datetime.date.today().isoformat(), "وقوف خاطئ",
+        amount=3000, conn=conn,
+    )
+
+    features.set_tier(features.TIER_BASIC)
+    try:
+        with pytest.raises(features.FeatureLocked):
+            maintenance_repo.close_maintenance(record_id, conn=conn)
+        with pytest.raises(features.FeatureLocked):
+            maintenance_repo.settle_violation(violation_id, conn=conn)
+    finally:
+        features.set_tier(features.TIER_PRO)

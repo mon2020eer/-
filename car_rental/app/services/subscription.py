@@ -9,6 +9,8 @@
 """
 
 import datetime
+import json
+import pathlib
 import uuid
 
 from ..core import audit, features, licensing
@@ -23,6 +25,63 @@ KEY_LAST_SEEN = "last_seen_date"
 
 def _today():
     return datetime.date.today()
+
+
+# ---------------------------------------------------------------------------
+# وسم التجربة: خارج قاعدة البيانات لأن القاعدة تُستبدل
+# ---------------------------------------------------------------------------
+# «تجربة واحدة لكل جهاز» وعدٌ لا تستطيع قاعدةُ البيانات حفظه: ``--data-dir``
+# و``CAR_RENTAL_HOME`` يختاران قاعدةً أخرى، فقاعدة جديدة = تجربة جديدة بلا حدّ.
+# فيُكتب الوسم في ملفّ في مجلد المستخدم، مربوطاً ببصمة الجهاز.
+#
+# وحدّه معروف ومقصود التصريح به: هذا يمنع التجاوز **العرضي** — مكتب يجرّب ثم
+# ينشئ قاعدة جديدة فيجد التجربة منتهية — ولا يمنع عابثاً مصمِّماً يملك جهازه
+# ويحذف الملف. والنموذج العامل دون إنترنت لا يملك تخزيناً محصَّناً أصلاً، فادّعاء
+# غير ذلك خداعٌ للنفس. وحاجزُ الجِدّ كافٍ: من يبلغ حذفَ ملفٍّ مخفيّ لم يكن
+# ليدفع أصلاً.
+_MARKER_NAME = ".car_rental_trial"
+
+
+def _trial_marker_path():
+    """مسار وسم التجربة — في مجلد المستخدم لا في مجلد بيانات التطبيق."""
+    return pathlib.Path.home() / _MARKER_NAME
+
+
+def _read_trial_marker():
+    """يقرأ وسم التجربة إن كان لهذا الجهاز، وإلّا ``None``.
+
+    وسمٌ منسوخ من جهاز آخر (مع ملفّات المستخدم مثلاً) يُهمل: لا يجوز أن
+    يُحرَم مكتبٌ من تجربته لأن ملفّاً غريباً وصل إلى حاسوبه.
+    """
+    try:
+        raw = _trial_marker_path().read_text(encoding="utf-8")
+        marker = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+
+    if not isinstance(marker, dict) or not marker.get("started"):
+        return None
+    if marker.get("fingerprint") != machine_id():
+        return None
+    return marker
+
+
+def _write_trial_marker(started, tier):
+    """يكتب وسم التجربة، ويصمت إن تعذّرت الكتابة.
+
+    فشل الكتابة — مجلد للقراءة فقط، أو صلاحية محجوبة — لا يجوز أن يمنع مكتباً
+    من تجربة البرنامج: الوسم حمايةٌ للمالك، والتجربة خدمةٌ للعميل، ولا تُلغى
+    الخدمة لأن الحماية تعذّرت.
+    """
+    try:
+        _trial_marker_path().write_text(
+            json.dumps({"fingerprint": machine_id(), "started": started, "tier": tier},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return True
+    except OSError:
+        return False
 
 
 def machine_id():
@@ -60,10 +119,15 @@ def status(conn=None, today=None):
                 features.TIER_LOCKED, "invalid", message=str(error)
             )
 
-    # 3) فترة تجريبية
+    # 3) فترة تجريبية — من القاعدة، أو من وسم الجهاز إن استُبدلت القاعدة
     started = settings_repo.get(KEY_TRIAL_START, "", conn=conn)
+    tier = settings_repo.get(KEY_TRIAL_TIER, features.TIER_BASIC, conn=conn)
+    if not started:
+        marker = _read_trial_marker()
+        if marker:
+            started = marker["started"]
+            tier = marker.get("tier") or features.TIER_BASIC
     if started:
-        tier = settings_repo.get(KEY_TRIAL_TIER, features.TIER_BASIC, conn=conn)
         return licensing.trial_status(started, tier, today=today)
 
     # 4) لم يُختر شيء بعد
@@ -78,7 +142,7 @@ def start_trial(tier, conn=None, today=None):
     if tier not in (features.TIER_BASIC, features.TIER_PRO):
         raise ValueError("نسخة غير معروفة.")
 
-    if settings_repo.get(KEY_TRIAL_START, "", conn=conn):
+    if settings_repo.get(KEY_TRIAL_START, "", conn=conn) or _read_trial_marker():
         raise licensing.LicenseError(
             "سبق استعمال الفترة التجريبية على هذا الجهاز.\n"
             "للمتابعة أدخل مفتاح اشتراك."
@@ -88,6 +152,7 @@ def start_trial(tier, conn=None, today=None):
     settings_repo.set_value(KEY_TRIAL_START, today.isoformat(), conn=conn)
     settings_repo.set_value(KEY_TRIAL_TIER, tier, conn=conn)
     settings_repo.set_value(KEY_LAST_SEEN, today.isoformat(), conn=conn)
+    _write_trial_marker(today.isoformat(), tier)
 
     audit.log("create", "settings", details={"trial": tier}, conn=conn)
     return apply_status(status(conn=conn, today=today))

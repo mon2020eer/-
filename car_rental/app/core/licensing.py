@@ -102,20 +102,26 @@ def _linux_machine_id():
 def machine_fingerprint():
     """بصمة ثابتة لهذا الجهاز.
 
-    تُمزج مصادر عدّة ثم تُجزَّأ: تغيّر أحدها وحده (كبطاقة شبكة تُنزع) لا يبطل
-    الترخيص ما دام المصدر الأقوى ثابتاً، ولا تُكشف أرقام الجهاز الحقيقية للعميل.
+    **المعرّف الأقوى وحده** حين يتوفّر (UUID اللوحة الأمّ في ويندوز، و
+    ``machine-id`` في لينكس)، والمصادر المتغيّرة **بديلاً عند غيابه لا مزيجاً
+    معه**.
+
+    التمييز ليس تفصيلاً: مزجُ اسم الجهاز وعنوان MAC مع المعرّف الثابت يجعل أي
+    تغيير عارض — اسم حاسوب يُصحَّح، بطاقة شبكة تُستبدل — يبطل مفتاح عميل دافع
+    فيُحرَم من برنامجه بلا ذنب، ويتحمّل المالك مكالمةَ غضبٍ وإصدارَ مفتاح جديد.
+    وأمّا الحماية فلا تنقص: المعرّف الثابت وحده لا يُنسخ إلى جهاز آخر.
+
+    ولا تُكشف أرقام الجهاز الحقيقية للعميل: يُعرض تجزيء لا المعرّف نفسه.
     """
-    parts = []
+    stable = (_windows_machine_id() if platform.system() == "Windows"
+              else _linux_machine_id())
 
-    if platform.system() == "Windows":
-        parts.append(_windows_machine_id() or "")
+    if stable and stable.strip():
+        parts = [stable]
     else:
-        parts.append(_linux_machine_id() or "")
-
-    parts.append(platform.node() or "")
-    parts.append(platform.machine() or "")
-    # عنوان MAC كمصدر مساعد لا أساسي
-    parts.append(str(uuid.getnode()))
+        # لا معرّف ثابت: تُجمع المصادر المتاحة مهما تكن، فبصمةٌ قابلة للتغيّر
+        # خيرٌ من لا بصمة — وهذه الحالة نادرة أصلاً.
+        parts = [platform.node() or "", platform.machine() or "", str(uuid.getnode())]
 
     raw = "|".join(part.strip().lower() for part in parts if part)
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest().upper()

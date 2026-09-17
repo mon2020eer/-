@@ -184,6 +184,8 @@ class VehiclesPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._read_only = False
+        self._detail_state = (False, None)
         self._build()
 
     def _build(self):
@@ -205,9 +207,9 @@ class VehiclesPage(QWidget):
         header.actions.addWidget(self.status_filter)
         header.actions.addWidget(self.search)
 
-        add_button = primary_button("+ سيارة جديدة")
-        add_button.clicked.connect(self._add)
-        header.add_action(add_button)
+        self.add_button = primary_button("+ سيارة جديدة")
+        self.add_button.clicked.connect(self._add)
+        header.add_action(self.add_button)
 
         layout.addWidget(header)
 
@@ -293,10 +295,27 @@ class VehiclesPage(QWidget):
 
     # ------------------------------------------------------------------
     def _set_detail_enabled(self, enabled, status=None):
+        self._detail_state = (bool(enabled), status)
+        enabled = bool(enabled) and not self._read_only
         self.edit_button.setEnabled(enabled)
         self.maintenance_button.setEnabled(enabled and status == "available")
         self.available_button.setEnabled(enabled and status == "maintenance")
         self.delete_button.setEnabled(enabled and session.has_role("admin"))
+
+    def _refresh_action_state(self):
+        self.add_button.setEnabled(not self._read_only)
+        self._set_detail_enabled(*self._detail_state)
+
+    # ------------------------------------------------------------------
+    def set_read_only(self, read_only=True):
+        """يعطّل أزرار التعديل ويُبقي العرض والطباعة — وضع القفل.
+
+        الأزرار تُعطَّل ولا تُخفى: صاحب المكتب يرى ما كان يفعله ويعلم أن
+        التجديد يعيده، ولا يظنّ أن المنظومة فقدت ما كانت تحسنه.
+        """
+        self._read_only = bool(read_only)
+        self._refresh_action_state()
+
 
     def _selected(self):
         vehicle_id = self.table.selected_id()

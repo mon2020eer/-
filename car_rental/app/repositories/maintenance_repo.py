@@ -48,6 +48,7 @@ def open_maintenance(vehicle_id, description, kind="repair", cost=0,
     return record_id
 
 
+@features.requires_feature("maintenance")
 def close_maintenance(record_id, cost=None, odometer=None, note=None, conn=None):
     """يُنهي الصيانة ويعيد السيارة إلى حالة «متاحة»."""
     session.require_login()
@@ -160,6 +161,7 @@ def add_violation(vehicle_id, occurred_at, description, amount=0,
     return violation_id
 
 
+@features.requires_feature("violations")
 def settle_violation(violation_id, conn=None):
     session.require_login()
     with db.transaction(conn) as tx:

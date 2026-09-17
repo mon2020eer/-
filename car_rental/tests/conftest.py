@@ -27,6 +27,17 @@ def app_home(tmp_path, monkeypatch):
     db.close_connection()
     config.reload_paths()
     config.ensure_directories()
+
+    # وسم التجربة يُكتب في مجلد المستخدم عمداً (لا في مجلد البيانات، لأن مجلد
+    # البيانات يُستبدل). فيُوجَّه هنا إلى المجلد المؤقّت، وإلّا كتبت الاختبارات
+    # في بيت المطوّر الحقيقي وتسرّبت حالةُ اختبارٍ إلى ما بعده.
+    from app.services import subscription
+
+    monkeypatch.setattr(
+        subscription, "_trial_marker_path",
+        lambda: tmp_path / subscription._MARKER_NAME,
+    )
+
     yield tmp_path
     db.close_connection()
 

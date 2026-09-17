@@ -106,6 +106,8 @@ class CustomersPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._symbol = ""
+        self._read_only = False
+        self._detail_enabled = False
         self._build()
 
     def _build(self):
@@ -134,9 +136,9 @@ class CustomersPage(QWidget):
         header.actions.addWidget(self.incomplete_toggle)
         header.actions.addWidget(self.search)
 
-        add_button = primary_button("+ عميل جديد")
-        add_button.clicked.connect(self._add)
-        header.add_action(add_button)
+        self.add_button = primary_button("+ عميل جديد")
+        self.add_button.clicked.connect(self._add)
+        header.add_action(self.add_button)
 
         layout.addWidget(header)
 
@@ -216,9 +218,26 @@ class CustomersPage(QWidget):
 
     # ------------------------------------------------------------------
     def _set_detail_enabled(self, enabled):
+        self._detail_enabled = bool(enabled)
+        enabled = bool(enabled) and not self._read_only
         self.edit_button.setEnabled(enabled)
         self.attach_button.setEnabled(enabled)
         self.delete_button.setEnabled(enabled and session.has_role("admin"))
+
+    def _refresh_action_state(self):
+        self.add_button.setEnabled(not self._read_only)
+        self._set_detail_enabled(self._detail_enabled)
+
+    # ------------------------------------------------------------------
+    def set_read_only(self, read_only=True):
+        """يعطّل أزرار التعديل ويُبقي العرض والطباعة — وضع القفل.
+
+        الأزرار تُعطَّل ولا تُخفى: صاحب المكتب يرى ما كان يفعله ويعلم أن
+        التجديد يعيده، ولا يظنّ أن المنظومة فقدت ما كانت تحسنه.
+        """
+        self._read_only = bool(read_only)
+        self._refresh_action_state()
+
 
     def _selected(self):
         customer_id = self.table.selected_id()

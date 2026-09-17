@@ -562,3 +562,44 @@ def test_plate_numbers_are_not_reversed_in_arabic_text():
     assert fix_dates("من 2026-09-01 إلى 2026-09-14").count(LRM) == 4
     assert fix_dates("بلا أرقام") == "بلا أرقام"
     assert fix_dates("") == ""
+
+
+def test_locked_tier_keeps_the_data_pages_but_disables_editing(gui, conn, admin):
+    """وضع القفل: الصفحات تُعرض والأزرار المعدِّلة معطَّلة.
+
+    حجبُ الصفحة كان يمنع صاحب المكتب من رؤية عملائه وعقوده — وهذا أسوأ من
+    منع التعديل، لأنه يحتجز بياناته هو رهينةَ التجديد.
+    """
+    from app.core import features
+    from app.ui.main_window import MainWindow
+    from app.ui.pages.contracts_page import ContractsPage
+    from app.ui.pages.customers_page import CustomersPage
+    from app.ui.pages.vehicles_page import VehiclesPage
+
+    features.set_tier(features.TIER_LOCKED)
+    try:
+        window = MainWindow(admin)
+        window.show()
+        gui.processEvents()
+
+        pages = {type(window.stack.widget(i)): window.stack.widget(i)
+                 for i in range(window.stack.count())}
+        for page_class in (CustomersPage, VehiclesPage, ContractsPage):
+            assert page_class in pages, page_class.__name__
+            assert not pages[page_class].add_button.isEnabled(), page_class.__name__
+
+        # والطباعة تبقى متاحة: العقد المطبوع حقٌّ لصاحبه لا امتياز اشتراك
+        from app.repositories import contracts_repo
+
+        contracts = pages[ContractsPage]
+        contracts.refresh()
+        gui.processEvents()
+        contracts._set_actions_enabled(contracts_repo.search(conn=conn)[0])
+
+        assert contracts.print_button.isEnabled()
+        assert not contracts.close_button.isEnabled()
+        assert not contracts.payment_button.isEnabled()
+        assert not contracts.cancel_button.isEnabled()
+        window.close()
+    finally:
+        features.set_tier(features.TIER_PRO)

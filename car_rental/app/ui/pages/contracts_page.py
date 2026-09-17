@@ -648,6 +648,8 @@ class ContractsPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._read_only = False
+        self._selected_contract = None
         self._build()
 
     def _build(self):
@@ -674,7 +676,7 @@ class ContractsPage(QWidget):
         header.actions.addWidget(self.payment_filter)
         header.actions.addWidget(self.search)
 
-        new_button = primary_button("+ عقد جديد")
+        self.add_button = new_button = primary_button("+ عقد جديد")
         new_button.clicked.connect(self._new_contract)
         header.add_action(new_button)
 
@@ -762,22 +764,42 @@ class ContractsPage(QWidget):
 
     # ------------------------------------------------------------------
     def _set_actions_enabled(self, contract):
-        is_open = bool(contract) and contract["status"] == "open"
+        self._selected_contract = contract
+        # وضع القفل يمنع كل ما يغيّر العقود، وتبقى **الطباعة** وحدها متاحة:
+        # العقد المطبوع حقٌّ لصاحبه لا امتياز اشتراك.
+        editable = not self._read_only
+        is_open = editable and bool(contract) and contract["status"] == "open"
         has_balance = bool(contract) and int(contract["balance_due"]) > 0
 
-        self.payment_button.setEnabled(bool(contract) and has_balance
+        self.payment_button.setEnabled(editable and bool(contract) and has_balance
                                        and contract["status"] != "cancelled")
         self.close_button.setEnabled(is_open)
         self.edit_button.setEnabled(is_open)
         self.extend_button.setEnabled(is_open)
         # التجديد متاح حتى بعد الإنهاء: العميل قد يعود بعد أيام فيُجدَّد له
         self.renew_button.setEnabled(
-            bool(contract) and contract["status"] != "cancelled"
+            editable and bool(contract) and contract["status"] != "cancelled"
         )
         self.print_button.setEnabled(bool(contract))
         self.cancel_button.setEnabled(
-            bool(contract) and contract["status"] != "cancelled" and session.has_role("admin")
+            editable and bool(contract) and contract["status"] != "cancelled"
+            and session.has_role("admin")
         )
+
+    def _refresh_action_state(self):
+        self.add_button.setEnabled(not self._read_only)
+        self._set_actions_enabled(self._selected_contract)
+
+    # ------------------------------------------------------------------
+    def set_read_only(self, read_only=True):
+        """يعطّل أزرار التعديل ويُبقي العرض والطباعة — وضع القفل.
+
+        الأزرار تُعطَّل ولا تُخفى: صاحب المكتب يرى ما كان يفعله ويعلم أن
+        التجديد يعيده، ولا يظنّ أن المنظومة فقدت ما كانت تحسنه.
+        """
+        self._read_only = bool(read_only)
+        self._refresh_action_state()
+
 
     def _selected(self):
         contract_id = self.table.selected_id()

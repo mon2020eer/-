@@ -106,6 +106,24 @@ def has_feature(name, tier=None):
     return name in FEATURES.get(tier or _active_tier, set())
 
 
+# ميزات تبقى **للعرض والقراءة** في وضع القفل وإن مُنع التعديل فيها.
+#
+# التمييز جوهري: اسم الميزة الواحد كان يحكم الصلاحية وإظهار الصفحة معاً، فمنعُ
+# التعديل كان يحجب الصفحة كلّها — فلا يرى صاحب المكتب عملاءه ولا عقوده. وهذا
+# نقضٌ لما وُعد به: بياناته ملكه، يقرأها ويطبعها وينسخها احتياطياً ولو انتهى
+# اشتراكه. القفل يمنع **العمل الجديد** لا يحتجز الماضي رهينةَ التجديد.
+READABLE_WHEN_LOCKED = frozenset({"vehicles", "customers", "contracts", "payments"})
+
+
+def can_view(name, tier=None):
+    """هل تُعرض صفحة هذه الميزة؟ أوسع من ``has_feature`` في وضع القفل وحده."""
+    if not name:
+        return True
+    if has_feature(name, tier=tier):
+        return True
+    return (tier or _active_tier) == TIER_LOCKED and name in READABLE_WHEN_LOCKED
+
+
 def vehicle_limit(tier=None):
     """أقصى عدد سيارات مسموح، و0 يعني بلا حدّ."""
     return BASIC_VEHICLE_LIMIT if (tier or _active_tier) == TIER_BASIC else 0
