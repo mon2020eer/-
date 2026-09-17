@@ -1,2 +1,11 @@
-requests==2.32.3
-beautifulsoup4==4.12.3
+# واجهة سطح المكتب (تشمل توليد PDF عبر QtPrintSupport)
+PyQt6==6.7.1
+
+# التحقّق من توقيع مفاتيح الاشتراك (Ed25519) — مطلوبة لتشغيل النسخة المرخّصة
+cryptography==43.0.1
+
+# تكامل Google Drive للنسخ الاحتياطي — اختياري: التطبيق يعمل كاملاً بدونه
+google-api-python-client==2.147.0
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
