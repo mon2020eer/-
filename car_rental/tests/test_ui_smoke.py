@@ -603,3 +603,26 @@ def test_locked_tier_keeps_the_data_pages_but_disables_editing(gui, conn, admin)
         window.close()
     finally:
         features.set_tier(features.TIER_PRO)
+
+
+def test_scheduler_waits_for_a_running_backup_before_shutdown(qt_app, conn, admin, monkeypatch):
+    """إيقاف الجدولة ينتظر الخيط العامل ولا يتركه ليُهدَم وهو يعمل.
+
+    `stop()` كان يوقف المؤقّت وحده، فتُغلق النافذة وتهدم كائن خيط يعمل —
+    وهذا يُسقط التطبيق عند الخروج («Destroyed while thread is still running»)
+    ويقطع رفعاً في منتصفه.
+    """
+    import time
+
+    from app.services.backup import backup_service, scheduler as scheduler_module
+
+    monkeypatch.setattr(backup_service, "run_backup",
+                        lambda mode="manual", **kwargs: time.sleep(0.4) or {"status": "success"})
+
+    scheduler = scheduler_module.BackupScheduler()
+    assert scheduler.run_backup(mode="manual") is True
+    assert scheduler.is_running()
+
+    scheduler.stop()
+
+    assert not scheduler.is_running(), "بقي خيط النسخ يعمل بعد إيقاف الجدولة"

@@ -249,10 +249,12 @@ class MainWindow(QMainWindow):
             if self.scheduler.is_running():
                 if not confirm(
                     self,
-                    "هناك عملية نسخ احتياطي جارية. الإغلاق الآن قد يُلغيها. هل تريد الإغلاق؟",
+                    "هناك عملية نسخ احتياطي جارية.\n"
+                    "سينتظر البرنامج انتهاءها قبل الإغلاق. هل تريد الإغلاق؟",
                 ):
                     event.ignore()
                     return
+            # ينتظر الخيط العامل: هدمُ كائن خيط يعمل يُسقط التطبيق عند الخروج
             self.scheduler.stop()
 
         db.close_connection()

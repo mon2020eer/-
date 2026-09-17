@@ -75,8 +75,33 @@ class BackupScheduler(QObject):
             # تأخير بسيط حتى تظهر النافذة أولاً فلا يبدو الإقلاع بطيئاً
             QTimer.singleShot(4000, self.check_now)
 
-    def stop(self):
+    def stop(self, wait_ms=20000):
+        """يوقف الجدولة، **وينتظر** الخيط العامل إن كان يعمل.
+
+        إيقاف المؤقّت وحده كان يترك خيط الرفع يعمل، فتُغلق النافذة وتهدم كائن
+        خيط عامل — يسقط التطبيق عند الخروج («Destroyed while thread is still
+        running») ويُقطع الرفع في منتصفه.
+
+        يُرجع ``True`` إن انتهى الخيط في المهلة، و``False`` إن اضطُرّ إلى
+        الإنهاء القسري.
+        """
         self._timer.stop()
+
+        thread = self._thread
+        if thread is None or not thread.isRunning():
+            return True
+
+        thread.quit()
+        if thread.wait(wait_ms):
+            return True
+
+        # لم ينتهِ في المهلة — رفعٌ متعثّر على شبكة بطيئة مثلاً. الإنهاء
+        # القسري آخر حلّ، وهو أسلم من هدم كائن خيط يعمل. ولا خطر على
+        # البيانات: النسخة تُقرأ ولا تُكتب، والسجلّ لا يُعلَّم ناجحاً إلّا بعد
+        # اكتمال الرفع فلا يُضلَّل المكتب بنسخة ناقصة.
+        thread.terminate()
+        thread.wait(2000)
+        return False
 
     def is_running(self):
         return self._thread is not None and self._thread.isRunning()

@@ -252,3 +252,185 @@ def test_verify_snapshot_leaves_no_temp_file_behind(conn, admin, tmp_path):
 
     leftovers = [path.name for path in tmp_path.glob("*.verify.db")]
     assert leftovers == [], "بقيت ملفات مؤقّتة: %s" % leftovers
+
+
+# ---------------------------------------------------------------------------
+# نسخة الأمان قبل الاستعادة
+# ---------------------------------------------------------------------------
+def test_safety_copy_holds_the_data_that_was_about_to_be_replaced(
+    conn, admin, sample_customer, sample_vehicle, fake_drive
+):
+    """نسخة `.pre-restore` تحمل القاعدة **كما كانت لحظة الاستعادة**.
+
+    كانت تُنسخ بنسخ الملف مباشرةً، وقاعدةُ WAL قد تحمل عملها المُودَع في ملفّ
+    `-wal` منفصل لم يُدمَج بعد — فتخرج النسخة ناقصةً آخر ما سُجِّل. وهذه آخر
+    خطّ رجعة لصاحب المكتب إن استعاد نسخةً خطأً: أن تكون هي نفسها ناقصة يعني
+    ألّا رجعة.
+    """
+    from app.repositories import customers_repo
+
+    result = backup_service.run_backup(mode="manual")
+    customers_repo.create(
+        {"full_name": "سالم الفيتوري", "phone": "0911111111",
+         "national_id": "22222222", "license_number": "LC-99"},
+        conn=conn,
+    )
+    assert len(customers_repo.search()) == 2
+
+    restore = backup_service.restore_from_drive(result["file_id"], conn=conn)
+
+    safety = db.connect(pathlib.Path(restore["safety_copy"]))
+    try:
+        names = [row[0] for row in safety.execute("SELECT full_name FROM customers")]
+    finally:
+        safety.close()
+
+    assert len(names) == 2, "نسخة الأمان لا تحمل ما كان في القاعدة: %s" % names
+
+
+def test_verify_snapshot_reports_a_cleanup_failure_on_a_valid_snapshot(
+    conn, admin, sample_vehicle, monkeypatch
+):
+    """نسخة سليمة تعذّر تنظيف ملفّها المؤقّت: يُبلَّغ ولا يُبتلَع.
+
+    ابتلاعُه يترك قاعدة بيانات كاملة غير مضغوطة على القرص بلا علم أحد —
+    وهي بيانات عملاء المكتب مكشوفةً في ملفّ لا يعرف أحد أنه وُلد.
+    """
+    archive = backup_service.create_local_snapshot()
+
+    real_unlink = pathlib.Path.unlink
+
+    def stubborn_unlink(self, *args, **kwargs):
+        if self.name.endswith(".verify.db"):
+            raise OSError("الملف قيد الاستعمال")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", stubborn_unlink)
+
+    with pytest.raises(backup_service.BackupError) as error:
+        backup_service.verify_snapshot(archive)
+    assert "المؤقّت" in str(error.value)
+
+
+def test_corrupt_snapshot_error_survives_a_cleanup_failure(conn, admin, tmp_path, monkeypatch):
+    """وسببُ التلف الأصلي لا يحجبه فشلُ التنظيف: التلف هو الخبر المهمّ."""
+    bad = tmp_path / "corrupt.db.gz"
+    with gzip.open(bad, "wb") as handle:
+        handle.write("ليست قاعدة بيانات".encode("utf-8"))
+
+    real_unlink = pathlib.Path.unlink
+
+    def stubborn_unlink(self, *args, **kwargs):
+        if self.name.endswith(".verify.db"):
+            raise OSError("الملف قيد الاستعمال")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", stubborn_unlink)
+
+    with pytest.raises(backup_service.BackupError) as error:
+        backup_service.verify_snapshot(bad)
+    assert "تالف" in str(error.value)
+
+
+# ---------------------------------------------------------------------------
+# عميل Drive: مِقبض التنزيل وترقيم الصفحات
+# ---------------------------------------------------------------------------
+class _FailingDownloader(object):
+    """ينزّل جزءاً ثم يفشل — يحاكي انقطاع الشبكة في منتصف التنزيل."""
+
+    def __init__(self, fd, request, *args, **kwargs):
+        self._fd = fd
+
+    def next_chunk(self):
+        from googleapiclient.errors import HttpError
+
+        raise HttpError(_FakeResponse(), b"network down")
+
+
+class _FakeResponse(object):
+    status = 500
+    reason = "Server Error"
+
+
+def test_download_closes_its_file_handle_when_the_transfer_fails(tmp_path, monkeypatch):
+    """فشل التنزيل يغلق مِقبض الملف قبل أن يرفع الخطأ.
+
+    تركُه مفتوحاً يُسرّب مِقبضاً مع كل محاولة، ويُبقي ملفّ الاستعادة مقفلاً
+    على ويندوز فلا يُحذف ولا يُكتب عليه — ومحاولات الاستعادة تتكرّر عادةً.
+    """
+    import googleapiclient.http
+
+    # يُحتفظ بالمرجع عمداً: لو تُرك للجامع لأغلقه عند جمعه، فيبدو المِقبض
+    # مغلقاً ويمرّ الاختبار على شيفرة لا تغلقه — حارسٌ يقيس الجامع لا الشيفرة.
+    opened = []
+    real_fileio = drive_client.io.FileIO
+
+    class SpyFileIO(real_fileio):
+        def __init__(self, *args, **kwargs):
+            real_fileio.__init__(self, *args, **kwargs)
+            opened.append(self)
+
+    monkeypatch.setattr(drive_client.io, "FileIO", SpyFileIO)
+    monkeypatch.setattr(googleapiclient.http, "MediaIoBaseDownload", _FailingDownloader)
+    monkeypatch.setattr(drive_client, "_service", lambda allow_interactive=True: _FakeService())
+
+    with pytest.raises(drive_client.DriveError):
+        drive_client.download_file("file-1", tmp_path / "restore.db.gz")
+
+    assert opened, "لم يُفتح ملفّ الهدف أصلاً"
+    assert opened[0].closed, "بقي مِقبض الملف مفتوحاً بعد فشل التنزيل"
+
+
+class _FakeService(object):
+    """خدمة Drive وهمية تُرجع صفحتين من الملفات."""
+
+    def __init__(self, pages=None):
+        self._pages = pages or []
+        self.requested_tokens = []
+
+    def files(self):
+        return self
+
+    def get_media(self, fileId=None):
+        return object()
+
+    def list(self, **kwargs):
+        self.requested_tokens.append(kwargs.get("pageToken"))
+        index = len(self.requested_tokens) - 1
+        page = self._pages[index] if index < len(self._pages) else {"files": []}
+        return _FakeRequest(page)
+
+
+class _FakeRequest(object):
+    def __init__(self, payload):
+        self._payload = payload
+
+    def execute(self):
+        return self._payload
+
+
+def test_listing_backups_follows_the_page_token(monkeypatch):
+    """سرد النسخ يتابع الصفحات حتى يكتمل العدد المطلوب.
+
+    الاكتفاء بالصفحة الأولى كان يجعل سياسة الاستبقاء ترى بعض النسخ فتُبقي
+    عشرات ما ظنّت أنها حذفتها، فيمتلئ مجلد Drive بلا أن يفهم أحد السبب.
+    """
+    first = {"files": [{"id": "a%d" % i} for i in range(3)], "nextPageToken": "T2"}
+    second = {"files": [{"id": "b%d" % i} for i in range(3)]}
+    service = _FakeService([first, second])
+
+    found = drive_client.list_backups(folder_id="folder", limit=6, service=service)
+
+    assert [item["id"] for item in found] == ["a0", "a1", "a2", "b0", "b1", "b2"]
+    assert service.requested_tokens == [None, "T2"]
+
+
+def test_listing_backups_stops_at_the_limit(monkeypatch):
+    """ولا يطلب صفحةً لا يحتاجها: العدد المطلوب يوقف الطلب."""
+    first = {"files": [{"id": "a%d" % i} for i in range(5)], "nextPageToken": "T2"}
+    service = _FakeService([first, {"files": [{"id": "b0"}]}])
+
+    found = drive_client.list_backups(folder_id="folder", limit=4, service=service)
+
+    assert len(found) == 4
+    assert service.requested_tokens == [None]

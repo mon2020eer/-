@@ -200,18 +200,31 @@ def list_backups(folder_id=None, limit=100, service=None):
     service = service or _service()
     folder_id = folder_id or ensure_folder(service)
 
+    # تُتابَع الصفحات حتى يكتمل العدد المطلوب: الاكتفاء بالصفحة الأولى كان
+    # يجعل سياسة الاستبقاء ترى بعض النسخ لا كلّها، فتُبقي عشرات ما ظنّت أنها
+    # حذفتها ويمتلئ مجلد Drive بلا أن يفهم صاحب المكتب السبب.
+    found, page_token = [], None
     try:
-        response = service.files().list(
-            q="'%s' in parents and trashed = false" % folder_id,
-            spaces="drive",
-            fields="files(id, name, size, createdTime)",
-            orderBy="createdTime desc",
-            pageSize=limit,
-        ).execute()
+        while len(found) < limit:
+            response = service.files().list(
+                q="'%s' in parents and trashed = false" % folder_id,
+                spaces="drive",
+                fields="nextPageToken, files(id, name, size, createdTime)",
+                orderBy="createdTime desc",
+                pageSize=min(limit - len(found), 1000),
+                pageToken=page_token,
+            ).execute()
+
+            page = response.get("files", [])
+            found.extend(page)
+
+            page_token = response.get("nextPageToken")
+            if not page_token or not page:
+                break
     except HttpError as error:
         raise DriveError("تعذّر سرد النسخ الاحتياطية: %s" % error)
 
-    return response.get("files", [])
+    return found[:limit]
 
 
 def download_file(file_id, target_path, service=None):
@@ -223,17 +236,21 @@ def download_file(file_id, target_path, service=None):
     target_path = pathlib.Path(target_path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
+    request = service.files().get_media(fileId=file_id)
+    buffer = io.FileIO(str(target_path), "wb")
     try:
-        request = service.files().get_media(fileId=file_id)
-        buffer = io.FileIO(str(target_path), "wb")
         downloader = MediaIoBaseDownload(buffer, request)
 
         done = False
         while not done:
             _, done = downloader.next_chunk()
-        buffer.close()
     except HttpError as error:
         raise DriveError("فشل تنزيل النسخة: %s" % error)
+    finally:
+        # الإغلاق على كل طريق: تركُه على مسار الفشل يُسرّب مِقبضاً مع كل
+        # محاولة، ويُبقي الملف مقفلاً على ويندوز فلا يُحذف ولا يُكتب عليه —
+        # ومحاولات الاستعادة تتكرّر عادةً.
+        buffer.close()
 
     return target_path
 

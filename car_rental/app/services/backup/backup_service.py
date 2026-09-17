@@ -52,6 +52,28 @@ def _finish_log(log_id, status, file_name=None, file_size=None,
     )
 
 
+def copy_database(source_db, target_db):
+    """ينسخ قاعدة بيانات نسخاً **متّسقاً** عبر واجهة ``sqlite3.backup``.
+
+    لا يُنسخ ملفّ القاعدة نسخاً مباشراً: في وضع WAL يبقى جزء من العمل المُودَع
+    في ملفّ ``-wal`` منفصل حتى يُدمَج، فنسخُ الملفّ وحده يُخرج قاعدةً ناقصةً
+    آخر ما سُجِّل — وقد تُنسخ أثناء كتابة جارية فتخرج متناقضة أصلاً.
+    """
+    source_db, target_db = pathlib.Path(source_db), pathlib.Path(target_db)
+    target_db.parent.mkdir(parents=True, exist_ok=True)
+
+    source = db.connect(source_db)
+    try:
+        destination = db.connect(target_db)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+    finally:
+        source.close()
+    return target_db
+
+
 def create_local_snapshot(target_path=None, source_db=None):
     """ينشئ نسخة متّسقة مضغوطة من قاعدة البيانات ويُرجع مسارها.
 
@@ -91,6 +113,7 @@ def verify_snapshot(archive_path):
     """يتحقّق من سلامة نسخة مضغوطة: يفكّها ويشغّل فحص سلامة SQLite عليها."""
     archive_path = pathlib.Path(archive_path)
     temp_db = archive_path.with_name(archive_path.stem + ".verify.db")
+    cleanup_error = None
 
     try:
         with gzip.open(archive_path, "rb") as src, open(temp_db, "wb") as dst:
@@ -113,11 +136,20 @@ def verify_snapshot(archive_path):
         # إلى المستخدم، لا أن يحلّ محلّها خطأ نظام غامض.
         try:
             temp_db.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as cleanup_failure:
+            cleanup_error = cleanup_failure
 
     if result != "ok" or not tables:
         raise BackupError("ملف النسخة تالف ولا يصلح للاستعادة.")
+
+    # أمّا إن كانت النسخة **سليمة** وتعذّر التنظيف، فالسكوت خطأ: يبقى ملفّ
+    # قاعدة بيانات كامل غير مضغوط على القرص — بيانات عملاء المكتب مكشوفةً في
+    # ملفّ لا يعرف أحد أنه وُلد ولا أنه بقي.
+    if cleanup_error is not None:
+        raise BackupError(
+            "النسخة سليمة، لكن تعذّر حذف الملف المؤقّت:\n%s\n%s"
+            % (temp_db, cleanup_error)
+        )
     return True
 
 
@@ -233,7 +265,9 @@ def restore_from_drive(file_id, conn=None):
             config.DB_PATH.name + ".pre-restore-%s" % _timestamp()
         )
         if config.DB_PATH.is_file():
-            shutil.copy2(str(config.DB_PATH), str(safety_copy))
+            # آخر خطّ رجعة لصاحب المكتب إن استعاد نسخةً خطأً، فلا تُؤخذ بنسخ
+            # الملفّ: ما في ملفّ `-wal` لم يُدمَج بعد وكان يضيع من النسخة.
+            copy_database(config.DB_PATH, safety_copy)
 
         _finish_log(log_id, "success", downloaded.name,
                     downloaded.stat().st_size, file_id,
