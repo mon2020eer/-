@@ -212,3 +212,40 @@ def test_sensitive_paths_are_really_ignored(path):
     assert result.returncode == 0, (
         "%s ليس متجاهَلاً في .gitignore — %s" % (path, MUST_BE_IGNORED[path])
     )
+
+
+# ---------------------------------------------------------------------------
+# روابط الأدلّة: رابطٌ ميّت يرسل القارئ إلى لا شيء
+# ---------------------------------------------------------------------------
+_MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+
+
+def _internal_links(path):
+    """روابط الملفّات المحلية وحدها: لا http ولا mailto ولا مرساة داخلية."""
+    text = path.read_text(encoding="utf-8")
+    for target in _MD_LINK.findall(text):
+        if target.startswith(("http://", "https://", "mailto:", "#")):
+            continue
+        yield target.split("#", 1)[0]          # تُقصّ المرساة، يبقى الملف
+
+
+@pytest.mark.parametrize(
+    "doc",
+    sorted((ROOT / "docs").glob("*.md")) + [ROOT / "README.md"],
+    ids=lambda p: p.name,
+)
+def test_documentation_links_point_at_real_files(doc):
+    """كل رابط داخلي في الأدلّة يشير إلى ملف موجود.
+
+    الأدلّة تتعفّن بصمت: نُقل التطبيق من `car_rental/` إلى الجذر فبقيت
+    تعليمات `cd car_rental` مكتوبة في ثلاثة أدلّة تُرشد إلى مجلد لم يعد
+    موجوداً. ولا اختبار يسقط على ذلك — القارئ وحده يكتشفه، بعد أن يضيع.
+    """
+    assert doc.is_file(), doc
+
+    broken = [
+        target for target in _internal_links(doc)
+        if target and not (doc.parent / target).resolve().exists()
+    ]
+
+    assert not broken, "روابط ميّتة في %s:\n  %s" % (doc.name, "\n  ".join(broken))

@@ -52,6 +52,9 @@
 
 ## 🚀 التشغيل السريع (للمطوّر)
 
+> على حاسوب نظيف تماماً — أو لتثبيته في مكتب — اتبع
+> [**دليل التشغيل من الصفر**](docs/INSTALL.md) بدلاً من هذا القسم.
+
 ```bash
 python -m pip install -r requirements.txt
 python -m app
@@ -93,6 +96,7 @@ powershell -ExecutionPolicy Bypass -File build\build_exe.ps1
 
 | الدليل | المحتوى |
 |---|---|
+| ⭐ [`docs/INSTALL.md`](docs/INSTALL.md) | **ابدأ من هنا**: التشغيل من الصفر على أي حاسوب — مسارٌ لجهاز المكتب وآخر للبناء والتوزيع |
 | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | دليل المستخدم: كيف تدير يوم عمل كامل بالمنظومة |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | المعمارية ومخطط قاعدة البيانات وقرارات التصميم |
 | [`docs/GOOGLE_DRIVE_SETUP.md`](docs/GOOGLE_DRIVE_SETUP.md) | إعداد النسخ الاحتياطي على Google Drive خطوة بخطوة |
@@ -132,7 +136,7 @@ powershell -ExecutionPolicy Bypass -File build\build_exe.ps1
 │  ├─ repositories/  قراءة وكتابة الكيانات
 │  ├─ services/      التسعير، العقود، PDF، قوالب الطباعة، التنبيهات، الاشتراك
 │  └─ ui/            واجهة PyQt6 العربية (RTL)
-├─ tests/            ٢٧٥ اختباراً: منطق + تكامل + ترقية + ترخيص + قوالب + واجهة
+├─ tests/            ٢٨٣ اختباراً: منطق + تكامل + ترقية + ترخيص + قوالب + واجهة
 ├─ tools/            أداة المالك لتوليد مفاتيح الاشتراك (لا تُوزَّع مع التطبيق)
 ├─ build/            ملف PyInstaller وسكربت البناء ومثبّت Inno Setup
 └─ docs/             الأدلّة العربية
