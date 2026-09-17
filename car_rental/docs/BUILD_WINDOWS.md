@@ -53,6 +53,15 @@ powershell -ExecutionPolicy Bypass -File build\build_exe.ps1
 powershell -ExecutionPolicy Bypass -File build\build_exe.ps1 -NoVenv
 ```
 
+> ⚠️ **شرط `-NoVenv`:** الخيار يتخطّى تثبيت `requirements.txt` ولا يثبّت سوى
+> `pyinstaller` و`pytest`. فيجب أن تكون مكتبات التطبيق — `PyQt6` و`cryptography`
+> وغيرهما — **مثبَّتة على جهازك مسبقاً**، وإلّا فشلت الاختبارات والبناء برسالة
+> `ModuleNotFoundError`. ثبّتها مرّة واحدة:
+>
+> ```powershell
+> python -m pip install -r requirements.txt
+> ```
+
 يتولّى السكربت كل شيء بالترتيب:
 
 1. التحقّق من إصدار بايثون،

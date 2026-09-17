@@ -13,11 +13,6 @@ def _columns(conn, table):
     return {row[1] for row in conn.execute("PRAGMA table_info(%s)" % table)}
 
 
-def _tables(conn):
-    return {row[0] for row in
-            conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-
-
 def _add_column(conn, table, column, definition):
     """يضيف عموداً إن لم يكن موجوداً. SQLite لا يعرف ADD COLUMN IF NOT EXISTS."""
     if column not in _columns(conn, table):
@@ -55,6 +50,19 @@ def _migration_2(conn):
     conn.execute("DROP VIEW IF EXISTS v_contracts_full")
 
 
+def _customers_need_rebuild(conn):
+    """هل ما يزال جدول العملاء بقيوده القديمة؟
+
+    يُسأل الجدولُ نفسه لا أثرٌ جانبي: ``PRAGMA table_info`` يُرجع في العمود
+    الرابع علم ``NOT NULL``، فوجودُه على أيٍّ من الحقول الثلاثة يعني أن
+    البناء لم يتمّ — مهما بقي من جداول مؤقّتة.
+    """
+    return any(
+        row[1] in ("phone", "national_id", "license_number") and row[3]
+        for row in conn.execute("PRAGMA table_info(customers)")
+    )
+
+
 def _migration_3(conn):
     """نموذج المكتب وتنبيهات التأمين والعميل السريع.
 
@@ -75,45 +83,46 @@ def _migration_3(conn):
     conn.execute("DROP VIEW IF EXISTS v_contract_balance")
 
     # --- 1) إعادة بناء جدول العملاء ---------------------------------------
-    # المفاتيح الأجنبية تُعطَّل أثناء إعادة البناء وإلّا اعتبر المحرّك إسقاط
-    # الجدول القديم كسراً لمراجع العقود إليه. والمعاملة تضمن ألّا تبقى القاعدة
-    # نصف مبنيّة إن انقطع التيار في المنتصف.
-    if "customers_v3" not in _tables(conn):
-        conn.execute("PRAGMA foreign_keys = OFF")
-        try:
-            conn.execute("""
-                CREATE TABLE customers_v3 (
-                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                    full_name      TEXT    NOT NULL,
-                    phone          TEXT,
-                    national_id    TEXT    UNIQUE,
-                    license_number TEXT,
-                    license_expiry TEXT,
-                    nationality    TEXT,
-                    address        TEXT,
-                    notes          TEXT,
-                    is_blacklisted INTEGER NOT NULL DEFAULT 0
-                                   CHECK (is_blacklisted IN (0, 1)),
-                    created_at     TEXT NOT NULL
-                                   DEFAULT (datetime('now', 'localtime')),
-                    updated_at     TEXT NOT NULL
-                                   DEFAULT (datetime('now', 'localtime'))
-                )
-            """)
-            conn.execute("""
-                INSERT INTO customers_v3 (id, full_name, phone, national_id,
-                                          license_number, license_expiry,
-                                          nationality, address, notes,
-                                          is_blacklisted, created_at, updated_at)
-                SELECT id, full_name, phone, national_id, license_number,
-                       license_expiry, nationality, address, notes,
-                       is_blacklisted, created_at, updated_at
-                  FROM customers
-            """)
-            conn.execute("DROP TABLE customers")
-            conn.execute("ALTER TABLE customers_v3 RENAME TO customers")
-        finally:
-            conn.execute("PRAGMA foreign_keys = ON")
+    # المفاتيح الأجنبية مُعطَّلة أثناء الترقية كلّها (انظر ``_apply_one``)،
+    # وإلّا اعتبر المحرّك إسقاط الجدول القديم كسراً لمراجع العقود إليه.
+    #
+    # ومعيار «هل بُنيت؟» هو **قيود الجدول نفسه** لا وجود جدول مؤقّت: وجودُ
+    # ``customers_v3`` كان يُعدّ دليلَ اكتمال، فترقيةٌ تعثّرت بعد إنشائه تجعل
+    # التشغيل التالي يتخطّى البناء ويرفع رقم الإصدار — فتدّعي القاعدة ترقيةً
+    # لم تقع. والجدول المؤقّت يُسقَط أولاً لأن نسخةً قديمة قد تكون خلّفته.
+    if _customers_need_rebuild(conn):
+        conn.execute("DROP TABLE IF EXISTS customers_v3")
+        conn.execute("""
+            CREATE TABLE customers_v3 (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                full_name      TEXT    NOT NULL,
+                phone          TEXT,
+                national_id    TEXT    UNIQUE,
+                license_number TEXT,
+                license_expiry TEXT,
+                nationality    TEXT,
+                address        TEXT,
+                notes          TEXT,
+                is_blacklisted INTEGER NOT NULL DEFAULT 0
+                               CHECK (is_blacklisted IN (0, 1)),
+                created_at     TEXT NOT NULL
+                               DEFAULT (datetime('now', 'localtime')),
+                updated_at     TEXT NOT NULL
+                               DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+        conn.execute("""
+            INSERT INTO customers_v3 (id, full_name, phone, national_id,
+                                      license_number, license_expiry,
+                                      nationality, address, notes,
+                                      is_blacklisted, created_at, updated_at)
+            SELECT id, full_name, phone, national_id, license_number,
+                   license_expiry, nationality, address, notes,
+                   is_blacklisted, created_at, updated_at
+              FROM customers
+        """)
+        conn.execute("DROP TABLE customers")
+        conn.execute("ALTER TABLE customers_v3 RENAME TO customers")
 
     # --- 2) التأمين والفحص الفنّي -----------------------------------------
     _add_column(conn, "vehicles", "insurance_company", "TEXT")
@@ -129,6 +138,11 @@ def _migration_3(conn):
 
 
 
+# إعادة بناء جدول العملاء تُسقط جدولاً تشير إليه العقود، فتلزم تعطيلُ المفاتيح
+# الأجنبية طوال هذه الترقية.
+_migration_3.foreign_keys_off = True
+
+
 # (رقم الإصدار، الدالة) بترتيب تصاعدي
 MIGRATIONS = [
     (1, _migration_1),
@@ -141,6 +155,38 @@ def current_version(conn):
     return conn.execute("PRAGMA user_version").fetchone()[0]
 
 
+def _apply_one(conn, target, migrate):
+    """يطبّق ترقيةً واحدة **ورقمَها** في معاملة واحدة.
+
+    الذرّية هنا ليست ترفاً: ترقيةٌ تتعثّر في منتصفها — انقطاع تيار، قرص ممتلئ،
+    مضادّ فيروسات — كانت تترك القاعدة نصف مبنيّة ورقمَ إصدارها يدّعي الاكتمال.
+    فإمّا أن تتمّ الترقية ورقمُها معاً، وإمّا ألّا يقع منها شيء ويُعاد التشغيل.
+
+    و``PRAGMA foreign_keys`` لا يعمل داخل معاملة، فيُضبط قبل ``BEGIN`` ويُعاد
+    بعد نهايتها — وترقيةٌ تُعيد بناء جدول مرجعيّ تطلب تعطيله بعلمٍ عليها.
+    """
+    needs_fk_off = getattr(migrate, "foreign_keys_off", False)
+    previous_fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+
+    if needs_fk_off:
+        conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            migrate(conn)
+            # PRAGMA لا يقبل المعاملات (parameters)، والقيمة رقم مُولَّد داخلياً.
+            # وهو جزء من ترويسة القاعدة، فيتراجع مع المعاملة كبقيّة التغييرات.
+            conn.execute("PRAGMA user_version = %d" % int(target))
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        else:
+            conn.execute("COMMIT")
+    finally:
+        if needs_fk_off:
+            conn.execute("PRAGMA foreign_keys = %s" % ("ON" if previous_fk else "OFF"))
+
+
 def apply(conn):
     """يطبّق كل الترقيات الأحدث من الإصدار المخزَّن، ويُرجع الإصدار النهائي."""
     version = current_version(conn)
@@ -148,9 +194,7 @@ def apply(conn):
     for target, migrate in MIGRATIONS:
         if target <= version:
             continue
-        migrate(conn)
-        # PRAGMA لا يقبل المعاملات (parameters)، والقيمة رقم مُولَّد داخلياً
-        conn.execute("PRAGMA user_version = %d" % int(target))
+        _apply_one(conn, target, migrate)
         version = target
 
     return version

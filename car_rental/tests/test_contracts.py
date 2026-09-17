@@ -720,3 +720,33 @@ def test_payment_balance_check_runs_inside_the_write_transaction(
     payments_repo.add(contract_id, 5000, conn=conn)
 
     assert seen.get("locked") is True
+
+
+def test_base_currency_cannot_change_once_contracts_exist(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """تغيير عملة الأساس بعد وجود عقود مرفوض برسالة مفهومة.
+
+    كل عقد يحفظ `rate_to_base` وقت إنشائه، فتغييرُ الأساس يُبقي أرقام الماضي
+    كما هي ويعرضها برمز العملة الجديد — فيقرأ صاحب المكتب «٥٥٠٠٠ دولاراً» عن
+    عقد قيمته ٥٥٠٠٠ ديناراً، ويبني عليه قراره. والمنع أصدق من ترحيلٍ يوهم
+    بدقّة لا يملكها.
+    """
+    from app.repositories import settings_repo
+
+    start, end = _dates(1)
+    rental_service.open_contract(sample_customer, sample_vehicle, start, end, conn=conn)
+
+    with pytest.raises(ValueError) as error:
+        settings_repo.set_base_currency("USD", conn=conn)
+    assert "عقود" in str(error.value)
+
+    assert settings_repo.base_currency(conn=conn)["code"] == "LYD"
+
+
+def test_base_currency_can_still_be_set_before_any_contract(conn, admin):
+    """وقبل أول عقد يبقى التغيير متاحاً: هذا وقت ضبط الإعدادات."""
+    from app.repositories import settings_repo
+
+    assert settings_repo.set_base_currency("USD", conn=conn) is True
+    assert settings_repo.base_currency(conn=conn)["code"] == "USD"

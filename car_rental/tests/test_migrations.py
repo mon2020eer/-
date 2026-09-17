@@ -319,3 +319,86 @@ def test_upgrade_works_when_views_already_exist(app_home):
     assert connection.execute(
         "SELECT COUNT(*) FROM v_contracts_full"
     ).fetchone()[0] is not None
+
+
+# ---------------------------------------------------------------------------
+# ذرّية الترقية: إمّا تمّت أو لم يقع منها شيء
+# ---------------------------------------------------------------------------
+def test_a_failed_migration_does_not_advance_the_version(app_home, monkeypatch):
+    """ترقية تعثّرت في منتصفها لا تُسجَّل ناجحة ولا تترك أثراً نصفياً.
+
+    كانت إعادة بناء جدول العملاء تجري بلا معاملة، فإن فشلت عبارة بعد إنشاء
+    `customers_v3` بقي الجدول المؤقّت؛ ويعدّه التشغيل التالي دليلَ اكتمال
+    فيتخطّى البناء ثم يرفع رقم الإصدار إلى ٣ — وجدول العملاء ما يزال بقيوده
+    القديمة. فتصير القاعدة تدّعي ترقيةً لم تقع، ولا يكتشف المكتب ذلك إلّا حين
+    يعجز عن تسجيل زبون باسمه وحده، ولا يفهم لماذا.
+    """
+    from app import config
+
+    _build_v1_database(config.DB_PATH)
+    connection = db.connect(config.DB_PATH)
+
+    real_add_column = migrations._add_column
+
+    def failing_add_column(conn, table, column, definition):
+        if column == "insurance_company":
+            raise sqlite3.OperationalError("انقطع التيار في منتصف الترقية")
+        return real_add_column(conn, table, column, definition)
+
+    monkeypatch.setattr(migrations, "_add_column", failing_add_column)
+
+    with pytest.raises(sqlite3.OperationalError):
+        migrations.apply(connection)
+
+    assert migrations.current_version(connection) == 2, "رُفع رقم الإصدار رغم الفشل"
+    assert "customers_v3" not in {
+        row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }, "بقي الجدول المؤقّت بعد التراجع"
+
+    # وجدول العملاء لم يُمسّ: ما يزال بقيوده القديمة، فالترقية لم تقع فعلاً
+    notnull = {row[1] for row in connection.execute("PRAGMA table_info(customers)")
+               if row[3]}
+    assert "phone" in notnull
+
+    # والتشغيل التالي — بلا العطب — يُكمل الترقية سليمة
+    monkeypatch.setattr(migrations, "_add_column", real_add_column)
+    migrations.apply(connection)
+    assert migrations.current_version(connection) == _latest_version()
+
+    notnull = {row[1] for row in connection.execute("PRAGMA table_info(customers)")
+               if row[3]}
+    assert "phone" not in notnull
+    connection.close()
+
+
+def test_a_leftover_temporary_table_does_not_block_the_rebuild(app_home):
+    """جدول مؤقّت خلّفته نسخة قديمة معطوبة لا يُعدّ دليلَ اكتمال."""
+    from app import config
+
+    _build_v1_database(config.DB_PATH)
+    connection = db.connect(config.DB_PATH)
+    connection.execute("CREATE TABLE customers_v3 (id INTEGER PRIMARY KEY)")
+
+    migrations.apply(connection)
+
+    notnull = {row[1] for row in connection.execute("PRAGMA table_info(customers)")
+               if row[3]}
+    assert "phone" not in notnull, "لم تُعَد بناء جدول العملاء"
+    assert migrations.current_version(connection) == _latest_version()
+    connection.close()
+
+
+def test_foreign_keys_are_restored_after_the_rebuild(app_home):
+    """المفاتيح الأجنبية تعود مفعّلة بعد الترقية مهما كان مسارها."""
+    from app import config
+
+    _build_v1_database(config.DB_PATH)
+    connection = db.connect(config.DB_PATH)
+    assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    migrations.apply(connection)
+
+    assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    connection.close()
