@@ -76,7 +76,8 @@ class AlertsPage(QWidget):
         card.body.addWidget(self.table)
         layout.addWidget(card, 1)
 
-        self.empty_label = QLabel("لا توجد تنبيهات — كل الوثائق سارية.")
+        self.EMPTY_TEXT = "لا توجد تنبيهات — كل الوثائق سارية."
+        self.empty_label = QLabel(self.EMPTY_TEXT)
         self.empty_label.setObjectName("hint")
         layout.addWidget(self.empty_label)
 
@@ -103,10 +104,15 @@ class AlertsPage(QWidget):
                 kinds=[self.kind_filter.currentData()]
                 if self.kind_filter.currentData() else None,
             )
-        except Exception:
-            # النسخة الأساسية لا تملك الميزة: الصفحة لا تُبنى أصلاً، وهذا
-            # احتياط لئلّا ينهار التحديث إن استُدعي من مسار آخر.
-            found = []
+        except Exception as error:
+            # فشل الفحص ليس «كل شيء سليم»: عرضُ رسالة الاطمئنان هنا يطمئن
+            # صاحب المكتب كذباً، فيمضي وتأمين سيارته منتهٍ وهو يظنّه سارياً.
+            # (والنسخة الأساسية لا تملك الميزة أصلاً فصفحتها لا تُبنى، وهذا
+            # احتياط لئلّا ينهار التحديث إن استُدعي من مسار آخر.)
+            self._show_unavailable(error)
+            return
+        else:
+            self.empty_label.setText(self.EMPTY_TEXT)
 
         severity = self.severity_filter.currentData()
         rows = [alert for alert in found
@@ -121,6 +127,16 @@ class AlertsPage(QWidget):
 
         self.table.fill(rows, self._row)
         self.empty_label.setVisible(not rows)
+
+    def _show_unavailable(self, error):
+        """حالة «تعذّر الفحص» — منفصلة عن «لا توجد تنبيهات»."""
+        self.table.fill([], self._row)
+        self.expired_card.value_label.setText("—")
+        self.soon_card.value_label.setText("—")
+        self.empty_label.setText(
+            "تعذّر فحص التنبيهات:\n%s\nالأرقام أعلاه غير معروفة، لا صفر." % error
+        )
+        self.empty_label.setVisible(True)
 
     @staticmethod
     def _row(alert, key):

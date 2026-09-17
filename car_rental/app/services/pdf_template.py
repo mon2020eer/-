@@ -85,14 +85,17 @@ FIELDS = (
     ("contract_number",      "رقم العقد",             "العقد"),
     ("start_date",           "تاريخ المغادرة",        "العقد"),
     ("end_date",             "تاريخ العودة",          "العقد"),
-    ("days_count",           "عدد الأيام",            "العقد"),
+    # التسمية محايدة لأن القيمة تتبع نمط الاحتساب: أيامٌ في العقد اليومي
+    # وساعاتٌ في المُغلَق بالاحتساب الساعي. والمفتاح ثابت فلا تنكسر تعيينات
+    # المكاتب القائمة.
+    ("days_count",           "المدّة",                 "العقد"),
     ("pickup_location",      "مكان التجوّل",           "العقد"),
     ("today",                "تاريخ اليوم",           "العقد"),
 
     ("total_amount",         "إجمالي المبلغ",         "المبالغ"),
     ("paid_amount",          "المبلغ المدفوع",        "المبالغ"),
     ("balance_amount",       "باقي المبلغ",           "المبالغ"),
-    ("daily_rate",           "السعر اليومي",          "المبالغ"),
+    ("daily_rate",           "التعرفة",               "المبالغ"),
 
     ("guarantor_name",       "اسم الكفيل",            "الكفيل"),
     ("guarantor_nationality", "جنسية الكفيل",         "الكفيل"),
@@ -175,8 +178,20 @@ def save_mapping(mapping, conn=None):
 
 
 def is_ready(conn=None):
-    """جاهزٌ للطباعة: ورقة مرفوعة وحقل واحد على الأقل معيَّن عليها."""
-    return has_template() and bool(load_mapping(conn=conn))
+    """جاهزٌ للطباعة: ورقة مرفوعة **مقروءة** وحقل واحد على الأقل معيَّن عليها.
+
+    تُفتح الورقة فعلاً لا يُكتفى بوجود ملفّها: نموذجٌ رُفع ثم تلف — قرصٌ أصابه
+    عطب، أو ملفّ استُبدل يدوياً — كان يجعل الطباعة تتوقّف بخطأ، فيقف المكتب
+    أمام زبونه بلا عقد. وغيابُ النموذج يرجع لعقد المنظومة بهدوء، فالتلف أولى
+    بأن يفعل مثله.
+    """
+    if not has_template() or not load_mapping(conn=conn):
+        return False
+    try:
+        _open_document()
+    except TemplateError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +370,18 @@ def values_for_contract(contract_id, conn=None):
     if balance is None:
         balance = (contract["total_amount"] or 0) - (paid or 0)
 
+    # المدّة والتعرفة تتبعان نمط الاحتساب: عقدٌ أُغلق بالساعة يطبع ساعاته
+    # وتعرفة ساعته — وإلّا خرج من البرنامج الواحد عقدان متناقضان لعميل واحد،
+    # وورقة المكتب هي التي يوقّعها الزبون.
+    hourly = column("billing_mode") == "hourly"
+    if hourly:
+        duration_value = column("hours_count")
+        rate_value = amount(contract["hourly_rate_snapshot"]
+                            if "hourly_rate_snapshot" in contract.keys() else 0)
+    else:
+        duration_value = column("days_count")
+        rate_value = amount(contract["daily_rate_snapshot"])
+
     return {
         "customer_name":          column("customer_name"),
         "customer_nationality":   column("customer_nationality"),
@@ -374,14 +401,14 @@ def values_for_contract(contract_id, conn=None):
         "contract_number":  column("contract_number"),
         "start_date":       column("start_date"),
         "end_date":         column("actual_end_date") or column("expected_end_date"),
-        "days_count":       column("days_count"),
+        "days_count":       duration_value,
         "pickup_location":  column("pickup_location"),
         "today":            datetime.date.today().isoformat(),
 
         "total_amount":   amount(contract["total_amount"]),
         "paid_amount":    amount(paid),
         "balance_amount": amount(balance),
-        "daily_rate":     amount(contract["daily_rate_snapshot"]),
+        "daily_rate":     rate_value,
 
         "guarantor_name":        column("guarantor_name"),
         "guarantor_nationality": column("guarantor_nationality"),

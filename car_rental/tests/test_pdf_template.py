@@ -5,6 +5,9 @@
 مكتب حقيقي وثيقة تخصّ صاحبها، ولا تُودَع في مستودع شيفرة.
 """
 
+import pathlib
+import sqlite3
+
 import pytest
 
 pytest.importorskip("PyQt6")
@@ -233,3 +236,107 @@ def test_builtin_contract_is_used_when_no_template(conn, admin, sample_customer,
     assert not contract_pdf.uses_office_template(conn=conn)
     output = contract_pdf.export_pdf(contract_id, tmp_path / "عقد.pdf", conn=conn)
     assert str(output).endswith("عقد.pdf")
+
+
+# ---------------------------------------------------------------------------
+# العقد بالساعة على ورقة المكتب
+# ---------------------------------------------------------------------------
+def test_hourly_contract_prints_hourly_values_on_the_office_form(
+    conn, admin, sample_customer, sample_vehicle
+):
+    """العقد المُغلق بالاحتساب الساعي يطبع ساعاته وتعرفة ساعته.
+
+    كان يطبع «٣ أيام» و«السعر اليومي» على ورقة المكتب بينما عقد المنظومة
+    يطبع الساعات صحيحةً — فيخرج من البرنامج الواحد عقدان متناقضان لعميل واحد،
+    وورقة المكتب هي التي يوقّعها الزبون.
+    """
+    import datetime
+
+    from app.core import db
+    from app.services import rental_service
+
+    today = datetime.date.today()
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, today.isoformat(),
+        (today + datetime.timedelta(days=3)).isoformat(),
+        start_time="08:00", conn=conn,
+    )
+    rental_service.close_contract(
+        contract_id, today.isoformat(), actual_end_time="14:00",
+        hourly=True, conn=conn,
+    )
+
+    contract = db.query_one(
+        "SELECT * FROM v_contracts_full WHERE id = ?", (contract_id,), conn=conn
+    )
+    assert contract["billing_mode"] == "hourly"
+
+    values = pdf_template.values_for_contract(contract_id, conn=conn)
+
+    from app.core import money
+
+    symbol = "د.ل"
+    assert values["days_count"] == str(contract["hours_count"])
+    assert values["daily_rate"] == money.format_amount(
+        contract["hourly_rate_snapshot"], symbol
+    )
+
+
+def test_duration_and_rate_labels_are_neutral():
+    """تسميتا المدّة والتعرفة محايدتان: العقد قد يكون بالأيام أو بالساعات.
+
+    ولا تتغيّر **مفاتيح** الحقول، فتعيينات المكاتب القائمة تبقى كما هي.
+    """
+    labels = {key: label for key, label, _ in pdf_template.FIELDS}
+    assert "يوم" not in labels["days_count"]
+    assert "يومي" not in labels["daily_rate"]
+    assert {"days_count", "daily_rate"} <= set(labels)
+
+
+# ---------------------------------------------------------------------------
+# النموذج التالف والفشل غير المتوقّع
+# ---------------------------------------------------------------------------
+def test_a_corrupt_installed_template_falls_back_to_the_builtin_contract(
+    conn, admin, sample_customer, sample_vehicle, blank_template, mapping, tmp_path
+):
+    """نموذجٌ مرفوعٌ ثم تلف لا يمنع الطباعة، بل يُطبع عقد المنظومة.
+
+    كان `is_ready` يكتفي بوجود الملف وتعيين الحقول، فيصير النموذج التالف
+    مانعاً للطباعة أصلاً — والمكتب يقف أمام زبونه بلا عقد. وغيابُ النموذج
+    يرجع لعقد المنظومة بهدوء، فالتلف أولى بأن يفعل مثله.
+    """
+    import datetime
+
+    from app.services import contract_pdf, rental_service
+
+    pdf_template.install(blank_template)
+    pdf_template.save_mapping(mapping, conn=conn)
+    assert contract_pdf.uses_office_template(conn=conn)
+
+    pdf_template.template_path().write_bytes("ليس PDF على الإطلاق".encode("utf-8"))
+    assert not contract_pdf.uses_office_template(conn=conn)
+
+    today = datetime.date.today()
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, today.isoformat(),
+        (today + datetime.timedelta(days=2)).isoformat(), conn=conn,
+    )
+    output = contract_pdf.export_pdf(contract_id, tmp_path / "عقد.pdf", conn=conn)
+    assert pathlib.Path(output).is_file()
+
+
+def test_an_unexpected_failure_is_not_swallowed_as_no_template(conn, admin, monkeypatch):
+    """فشلٌ غير متوقّع في قراءة الإعدادات يظهر، ولا يُقرأ «لا يوجد نموذج».
+
+    ابتلاعُه كان يجعل عطب قاعدة البيانات يُطبع عقداً بديلاً بلا كلمة، فيظنّ
+    المكتب أن نموذجه لم يُضبط ويعيد ضبطه مراراً بلا جدوى.
+    """
+    from app.services import contract_pdf
+
+    def broken(conn=None):
+        raise sqlite3.OperationalError("قاعدة البيانات مقفلة")
+
+    monkeypatch.setattr(pdf_template, "is_ready", broken)
+
+    with pytest.raises(sqlite3.OperationalError):
+        contract_pdf.uses_office_template(conn=conn)

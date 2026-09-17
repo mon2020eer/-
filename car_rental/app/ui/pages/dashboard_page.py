@@ -192,35 +192,40 @@ class DashboardPage(QWidget):
         يُبنى من مصدرين مختلفين عمداً ليبقى سطراً واحداً: صاحب المكتب يقرأ
         سطراً ويتصرّف، ولا يقرأ ثلاثة شرائط متراكمة.
         """
-        parts = []
+        parts, unavailable = [], []
 
         if features.has_feature("alerts"):
             try:
                 counts = alerts.summary()
             except Exception:
-                counts = {"expired": 0, "soon": 0}
+                # صفرٌ عند الفشل يكذب: الشريط يختفي فتبدو الحال نظيفة وهي
+                # مجهولة. «لا تنبيهات» و«لم يُفحص» حالتان لا واحدة.
+                counts = None
+                unavailable.append("التنبيهات")
 
-            if counts["expired"]:
-                parts.append("⚠ %s منتهية (تأمين أو فحص أو رخصة)"
-                             % arabic.count(counts["expired"], "وثيقة واحدة",
-                                            "وثيقتان", "وثائق", "وثيقة"))
-            if counts["soon"]:
-                parts.append("%s توشك على الانتهاء"
-                             % arabic.count(counts["soon"], "وثيقة واحدة",
-                                            "وثيقتان", "وثائق", "وثيقة"))
+            if counts:
+                if counts["expired"]:
+                    parts.append("⚠ %s منتهية (تأمين أو فحص أو رخصة)"
+                                 % arabic.count(counts["expired"], "وثيقة واحدة",
+                                                "وثيقتان", "وثائق", "وثيقة"))
+                if counts["soon"]:
+                    parts.append("%s توشك على الانتهاء"
+                                 % arabic.count(counts["soon"], "وثيقة واحدة",
+                                                "وثيقتان", "وثائق", "وثيقة"))
 
         try:
-            incomplete = sum(
-                1 for row in customers_repo.search(limit=2000)
-                if customers_repo.is_incomplete(row)
-            )
+            incomplete = customers_repo.count_incomplete()
         except Exception:
-            incomplete = 0
+            incomplete = None
+            unavailable.append("ملفّات العملاء")
 
         if incomplete:
             parts.append("%s ببيانات ناقصة"
                          % arabic.count(incomplete, "عميل واحد", "عميلان",
                                         "عملاء", "عميلاً"))
+
+        if unavailable:
+            parts.append("⚠ تعذّر فحص %s — الحالة غير معروفة" % " و".join(unavailable))
 
         self.alert_bar.setText("   ·   ".join(parts))
         self.alert_bar.setVisible(bool(parts))

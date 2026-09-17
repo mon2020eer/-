@@ -626,3 +626,89 @@ def test_scheduler_waits_for_a_running_backup_before_shutdown(qt_app, conn, admi
     scheduler.stop()
 
     assert not scheduler.is_running(), "بقي خيط النسخ يعمل بعد إيقاف الجدولة"
+
+
+# ---------------------------------------------------------------------------
+# فشل الفحص ليس «كل شيء سليم»
+# ---------------------------------------------------------------------------
+def test_alerts_page_says_the_check_failed_not_that_all_is_well(
+    gui, conn, admin, monkeypatch
+):
+    """تعذّر جمع التنبيهات يظهر حالةً مستقلّة لا رسالة الاطمئنان.
+
+    عرضُ «كل الوثائق سارية» عند فشل الاستعلام أسوأ من رسالة خطأ صريحة: إنه
+    يطمئن صاحب المكتب كذباً، فيمضي وتأمين سيارته منتهٍ وهو يظنّه سارياً.
+    """
+    import sqlite3
+
+    from app.ui.pages import alerts_page as page_module
+
+    working_collect = page_module.alerts.collect
+    page = page_module.AlertsPage()
+    page.refresh()
+    healthy_text = page.empty_label.text()
+
+    def broken(**kwargs):
+        raise sqlite3.OperationalError("قاعدة البيانات مقفلة")
+
+    monkeypatch.setattr(page_module.alerts, "collect", broken)
+    page.refresh()
+
+    assert "سارية" not in page.empty_label.text()
+    assert "تعذّر" in page.empty_label.text()
+
+    # وبعد نجاح التحديث تعود رسالة الاطمئنان كما كانت
+    monkeypatch.setattr(page_module.alerts, "collect", working_collect)
+    page.refresh()
+    assert page.empty_label.text() == healthy_text
+
+
+def test_dashboard_alert_bar_shows_an_unavailable_state_when_the_query_fails(
+    gui, conn, admin, monkeypatch
+):
+    """ولوحة المعلومات كذلك: شريطٌ مخفيّ يعني «لا شيء»، وهو غير «لم يُفحص»."""
+    import sqlite3
+
+    from app.ui.pages import dashboard_page as page_module
+
+    page = page_module.DashboardPage()
+
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("قاعدة البيانات مقفلة")
+
+    monkeypatch.setattr(page_module.alerts, "summary", broken)
+    monkeypatch.setattr(page_module.customers_repo, "search", broken)
+    page._refresh_alert_bar()
+
+    assert not page.alert_bar.isHidden()
+    assert "تعذّر" in page.alert_bar.text()
+
+
+def test_a_name_only_customer_is_not_given_a_licence_expiry(gui, conn, admin):
+    """عميل الاسم وحده لا يُحفظ له تاريخ انتهاء رخصة.
+
+    حقل التاريخ يبدأ من تاريخ اليوم، وكان يُحفظ دائماً — فيحمل عميلٌ بلا رخصة
+    رخصةً «تنتهي اليوم»، ويُنبَّه المكتب على وثيقة لم تُسجَّل أصلاً.
+    """
+    from app.repositories import customers_repo
+    from app.ui.pages.customers_page import CustomerDialog
+
+    dialog = CustomerDialog()
+    dialog.full_name.setText("زبون واقف أمام المكتب")
+    data = dialog.data()
+
+    assert data["license_expiry"] is None
+    assert data["license_number"] is None
+
+    customer_id = customers_repo.create(data, conn=conn)
+    assert customers_repo.get(customer_id, conn=conn)["license_expiry"] is None
+
+
+def test_a_licensed_customer_keeps_the_expiry_date(gui, conn, admin):
+    """ومن سُجِّلت رخصته يُحفظ تاريخها كما أُدخل."""
+    from app.ui.pages.customers_page import CustomerDialog
+
+    dialog = CustomerDialog()
+    dialog.full_name.setText("صاحب رخصة")
+    dialog.license_number.setText("LC-2030")
+    assert dialog.data()["license_expiry"]

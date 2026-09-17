@@ -81,7 +81,11 @@ class CustomerDialog(FormDialog):
             "phone": self.phone.text().strip() or None,
             "national_id": self.national_id.text().strip() or None,
             "license_number": self.license_number.text().strip() or None,
-            "license_expiry": self.license_expiry.date().toString("yyyy-MM-dd"),
+            # لا يُحفظ تاريخ انتهاء لرخصة لا وجود لها: حقل التاريخ يبدأ من
+            # تاريخ اليوم، فعميل الاسم وحده كان يُحفظ برخصة «تنتهي اليوم»
+            # فيُنبَّه المكتب على وثيقة لم تُسجَّل أصلاً.
+            "license_expiry": (self.license_expiry.date().toString("yyyy-MM-dd")
+                               if self.license_number.text().strip() else None),
             "nationality": self.nationality.text().strip() or None,
             "address": self.address.text().strip() or None,
             "notes": self.notes.toPlainText().strip() or None,
@@ -337,9 +341,8 @@ class CustomersPage(QWidget):
             rows = customers_repo.search(
                 self.search.text(),
                 order_by="frequent" if self.frequent_toggle.isChecked() else "name",
+                incomplete_only=self.incomplete_toggle.isChecked(),
             )
-            if self.incomplete_toggle.isChecked():
-                rows = [row for row in rows if customers_repo.is_incomplete(row)]
             self.table.fill(rows, self._format_customer)
         except Exception as error:
             show_error(self, error)

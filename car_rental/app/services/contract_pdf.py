@@ -282,7 +282,8 @@ def uses_office_template(conn=None):
     """
     if not features.has_feature("contract_template"):
         return False
-    try:
-        return pdf_template.is_ready(conn=conn)
-    except Exception:
-        return False
+    # لا يُبتلَع فشلٌ غير متوقّع هنا: الرجوع الصامت لعقد المنظومة سلوكٌ مقصود
+    # عند **غياب** النموذج أو تلفه — يفحصهما `is_ready` نفسها — لا عند عطب
+    # قاعدة البيانات. ابتلاعه يجعل المكتب يظنّ أن نموذجه لم يُضبط فيعيد ضبطه
+    # مراراً بلا جدوى، والسبب في مكان آخر تماماً.
+    return pdf_template.is_ready(conn=conn)

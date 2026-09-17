@@ -250,3 +250,31 @@ def test_plate_number_is_stored_trimmed(conn, admin):
         conn=conn,
     )
     assert vehicles_repo.get(vehicle_id, conn=conn)["plate_number"] == "8-1234"
+
+
+def test_incomplete_filter_is_applied_before_the_limit(conn, admin):
+    """ترشيح «الناقصة» يجري في الاستعلام لا بعد جلب أول خمسمئة.
+
+    الترشيح بعد `LIMIT` كان يُسقط كل ناقصٍ خارج النافذة، فتعرض الشاشة قائمةً
+    أقصر من الحقيقة ويطمئنّ المكتب إلى اكتمالٍ لا وجود له.
+    """
+    for index in range(6):
+        customers_repo.create({"full_name": "عميل مكتمل %d" % index,
+                               "phone": "091000000%d" % index,
+                               "national_id": "NID-%d" % index,
+                               "license_number": "LC-%d" % index}, conn=conn)
+    customers_repo.create({"full_name": "عميل ناقص"}, conn=conn)
+
+    found = customers_repo.search(limit=3, incomplete_only=True, conn=conn)
+
+    assert [row["full_name"] for row in found] == ["عميل ناقص"]
+    assert customers_repo.count_incomplete(conn=conn) == 1
+
+
+def test_count_incomplete_ignores_the_search_window(conn, admin):
+    """والعدّ بلا سقف: رقم تحذيرٍ ناقص أسوأ من لا رقم."""
+    for index in range(4):
+        customers_repo.create({"full_name": "ناقص %d" % index}, conn=conn)
+
+    assert customers_repo.count_incomplete(conn=conn) == 4
+    assert len(customers_repo.search(limit=2, incomplete_only=True, conn=conn)) == 2

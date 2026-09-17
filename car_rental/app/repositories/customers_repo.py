@@ -26,7 +26,7 @@ def get(customer_id, conn=None):
     return db.query_one("SELECT * FROM customers WHERE id = ?", (customer_id,), conn=conn)
 
 
-def search(term=None, limit=500, order_by="name", conn=None):
+def search(term=None, limit=500, order_by="name", incomplete_only=False, conn=None):
     """بحث سريع بالاسم أو الهاتف أو الرقم الوطني أو رقم الرخصة.
 
     يُستخدم ``LIKE`` بأنماط على الطرفين: عدد العملاء في مكتب واحد لا يبلغ
@@ -37,6 +37,10 @@ def search(term=None, limit=500, order_by="name", conn=None):
 
     ``order_by="frequent"`` يرتّب بالأكثر تعاملاً ثم بالأحدث — وهو الترتيب
     الذي يضع العملاء الذين يترددون على المكتب في أعلى القائمة.
+
+    ``incomplete_only=True`` يرشّح الملفّات الناقصة **في الاستعلام** قبل
+    ``LIMIT``: ترشيحُها بعده كان يُسقط كل ناقصٍ خارج أول خمسمئة، فتعرض شاشة
+    «الناقصة» قائمةً أقصر من الحقيقة ويطمئنّ المكتب إلى اكتمالٍ لا وجود له.
     """
     term = (term or "").strip()
     clauses, params = [], []
@@ -48,6 +52,9 @@ def search(term=None, limit=500, order_by="name", conn=None):
             " OR c.license_number LIKE ?)"
         )
         params.extend([pattern] * 4)
+
+    if incomplete_only:
+        clauses.append(_INCOMPLETE_SQL)
 
     order = (
         "contracts_count DESC, last_contract_date DESC, c.full_name"
@@ -97,6 +104,13 @@ REQUIRED_FOR_COMPLETE = {
     "license_number": "رقم رخصة القيادة",
 }
 
+# الشرط نفسه بلغة SQL، مشتقٌّ من القاموس أعلاه فلا يفترقان: إضافة حقل إلزامي
+# واحد كانت ستجعل شاشةَ «الناقصة» وعدّادَ اللوحة يقيسان شيئين مختلفين.
+_INCOMPLETE_SQL = "(%s)" % " OR ".join(
+    "c.%s IS NULL OR TRIM(c.%s) = ''" % (field, field)
+    for field in REQUIRED_FOR_COMPLETE
+)
+
 
 def missing_fields(row):
     """أسماء الحقول الناقصة في ملفّ عميل، بالعربية وبترتيب ثابت."""
@@ -107,6 +121,18 @@ def missing_fields(row):
 def is_incomplete(row):
     """هل ملفّ العميل ناقص؟ محسوبة لا مخزَّنة، فلا تتناقض مع البيانات."""
     return bool(missing_fields(row))
+
+
+def count_incomplete(conn=None):
+    """عدد الملفّات الناقصة — بلا سقف ولا ترشيح بعد ``LIMIT``.
+
+    العدّ في SQL لا في بايثون: عدُّ صفوفٍ جُلبت بسقفٍ يُخرج رقماً أصغر من
+    الحقيقة حين يتجاوز عدد العملاء ذلك السقف، ورقمُ تحذيرٍ ناقص أسوأ من لا رقم.
+    """
+    return db.scalar(
+        "SELECT COUNT(*) FROM customers c WHERE %s" % _INCOMPLETE_SQL,
+        conn=conn, default=0,
+    )
 
 
 # الحقول النصّية التي تُقصّ مسافاتها قبل الفحص والحفظ معاً. المعرّفات منها
