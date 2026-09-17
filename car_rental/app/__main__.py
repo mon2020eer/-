@@ -12,9 +12,89 @@
 """
 
 import argparse
+import datetime
 import os
 import sys
 import traceback
+
+
+# ---------------------------------------------------------------------------
+# مخارج آمنة
+# ---------------------------------------------------------------------------
+# في نسخة **نافذية** (console=False) يجعل ويندوز ``sys.stdout`` و``sys.stderr``
+# قيمتهما ``None``. فالكتابة عليهما مباشرةً تُسقط البرنامج بـ
+# «'NoneType' object has no attribute 'write'» — وهو ما وقع فعلاً، فأخفى
+# السببَ الحقيقي للفشل خلف رسالة لا تدلّ على شيء.
+def _write(stream, text):
+    """يكتب على مجرى قد يكون غائباً، ولا يُسقط البرنامج إن غاب."""
+    if stream is None:
+        return False
+    try:
+        stream.write(text)
+        stream.flush()
+        return True
+    except Exception:
+        return False
+
+
+def _out(text):
+    return _write(sys.stdout, text)
+
+
+def _err(text):
+    return _write(sys.stderr, text)
+
+
+def _log(text):
+    """يُلحق نصّاً بملف السجلّ — القناة الوحيدة المضمونة في نسخة نافذية."""
+    try:
+        from . import config
+
+        path = config.LOG_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("[%s] %s\n" % (
+                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), text
+            ))
+        return path
+    except Exception:
+        return None
+
+
+def _show_error_box(text):
+    """نافذة خطأ عربية — تُرى حتى حين لا يوجد مجرى إخراج أصلاً.
+
+    داخل ``try`` كذلك: إن كان الفشل في Qt نفسها فلا يجوز أن يُسقط عرضُ الخطأ
+    البرنامجَ مرّة أخرى، ويبقى السجلّ هو الأثر.
+    """
+    try:
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QApplication, QMessageBox
+
+        app = QApplication.instance() or QApplication(sys.argv[:1])
+        app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle("تعذّر تشغيل المنظومة")
+        box.setText(text)
+        box.exec()
+        return True
+    except Exception:
+        return False
+
+
+def _report_fatal(summary, detail=""):
+    """يوصل خطأ إقلاع قاتلاً إلى المستخدم مهما كانت صورة التشغيل."""
+    full = summary if not detail else "%s\n\n%s" % (summary, detail)
+
+    _err(full + "\n")
+    log_path = _log(full)
+
+    message = summary
+    if log_path is not None:
+        message += "\n\nحُفظت التفاصيل في:\n%s" % log_path
+    _show_error_box(message)
 
 
 def _parse_args(argv):
@@ -130,10 +210,10 @@ def run_backup():
     try:
         result = backup_service.run_backup(mode="auto")
     except Exception as error:
-        sys.stderr.write("فشل النسخ الاحتياطي: %s\n" % error)
+        _report_fatal("فشل النسخ الاحتياطي: %s" % error)
         return 1
 
-    sys.stdout.write("تمت النسخة الاحتياطية: %s\n" % result.get("file_name"))
+    _out("تمت النسخة الاحتياطية: %s\n" % result.get("file_name"))
     return 0
 
 
@@ -143,14 +223,14 @@ def main(argv=None):
     if args.version:
         from . import config
 
-        sys.stdout.write("%s — الإصدار %s\n" % (config.APP_TITLE_AR, config.APP_VERSION))
+        _out("%s — الإصدار %s\n" % (config.APP_TITLE_AR, config.APP_VERSION))
         return 0
 
     try:
         _bootstrap(args.data_dir)
     except Exception as error:
-        sys.stderr.write("تعذّرت تهيئة قاعدة البيانات: %s\n%s\n"
-                         % (error, traceback.format_exc()))
+        _report_fatal("تعذّرت تهيئة قاعدة البيانات:\n%s" % error,
+                      traceback.format_exc())
         return 1
 
     if args.backup_now:

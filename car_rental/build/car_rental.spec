@@ -19,7 +19,10 @@ APP_DIR = PROJECT_DIR / "app"
 block_cipher = None
 
 a = Analysis(
-    [str(APP_DIR / "__main__.py")],
+    # نقطة الدخول `run.py` لا `app/__main__.py`: PyInstaller تشغّل ملف نقطة
+    # الدخول بلا سياق حزمة، فتسقط استيرادات `app/__main__.py` النسبية بـ
+    # «attempted relative import with no known parent package».
+    [str(PROJECT_DIR / "run.py")],
     pathex=[str(PROJECT_DIR)],
     binaries=[],
     # ملفات غير برمجية يحتاجها التطبيق وقت التشغيل

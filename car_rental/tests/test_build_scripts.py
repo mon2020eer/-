@@ -111,3 +111,39 @@ def test_every_pip_call_is_checked_for_failure():
         "نداءات pip غير مفحوصة الفشل — لُفّها بـ Invoke-Step:\n  "
         + "\n  ".join(unchecked)
     )
+
+
+SPEC = ROOT / "build" / "car_rental.spec"
+
+
+def test_spec_entry_point_is_the_standalone_launcher():
+    """نقطة الدخول ملفٌّ بلا استيرادات نسبية.
+
+    PyInstaller تشغّل ملف نقطة الدخول بلا سياق حزمة، فوحدةٌ داخل حزمة تسقط
+    بـ «attempted relative import with no known parent package» — بعد بناء
+    ناجح تماماً، أي على جهاز العميل لا عندنا.
+    """
+    text = SPEC.read_text(encoding="utf-8")
+
+    analysis = text.split("a = Analysis(", 1)[1].split(")", 1)[0]
+    entry_lines = [line for line in analysis.splitlines()
+                   if "[" in line and not line.strip().startswith("#")]
+    assert entry_lines, "لم يُعثر على قائمة نقطة الدخول في المواصفات"
+
+    entry = entry_lines[0]
+    assert "run.py" in entry, "نقطة الدخول ليست run.py: %s" % entry.strip()
+    assert '"__main__.py"' not in entry, (
+        "نقطة الدخول وحدة داخل حزمة — ستسقط استيراداتها النسبية في النسخة المحزومة"
+    )
+
+
+def test_launcher_has_no_relative_imports():
+    """`run.py` يستورد استيراداً مطلقاً، وإلّا عاد العطب نفسه من بابه."""
+    launcher = ROOT / "run.py"
+    assert launcher.is_file(), "ملف نقطة الدخول مفقود: run.py"
+
+    for number, line in enumerate(launcher.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = line.strip()
+        assert not stripped.startswith("from ."), (
+            "استيراد نسبي في نقطة الدخول — run.py:%d: %s" % (number, stripped)
+        )

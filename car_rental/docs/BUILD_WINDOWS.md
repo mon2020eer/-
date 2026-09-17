@@ -172,7 +172,36 @@ icon=str(PROJECT_DIR / "build" / "icon.ico"),
 | `Missing closing '}' in statement block` عند تشغيل سكربت البناء | فُقدت علامة BOM من `build_exe.ps1` (يحدث إذا حُرّر وحُفظ بمحرّر يُسقطها). أعد جلب الملف: `git checkout build\build_exe.ps1` |
 | `Could not find a version that satisfies the requirement pyinstaller` | بايثون عندك أحدث ممّا تسمح به النسخة المطلوبة. **حدّث المستودع** (`git pull`) ولا تنزّل بايثون أقدم — الحلّ في السكربت لا في جهازك |
 | `No module named pytest` رغم نجاح التثبيت ظاهرياً | فشل تثبيت سابق ومضى السكربت. حدّث المستودع: صار يقف عند أول فشل ويسمّيه |
+| `attempted relative import with no known parent package` عند تشغيل الـ`.exe` | نقطة الدخول في ملف المواصفات وحدةٌ داخل حزمة. **حدّث المستودع**: صارت `run.py` |
+| `'NoneType' object has no attribute 'write'` عند تشغيل الـ`.exe` | النسخة النافذية بلا مجاري إخراج، وكان معالج الخطأ يكتب عليها فينهار مُخفياً السبب. حدّث المستودع: صار الخطأ يظهر في **نافذة عربية** ويُحفظ في `%APPDATA%\CarRentalOffice\app.log` |
 | `WARNING: The scripts … are installed in '…\Scripts' which is not on PATH` | تحذير من pip لا يمنع البناء **بعد تحديث المستودع**، لأن السكربت صار ينادي كل أدوات بايثون بـ `python -m`. وقبل ذلك التحديث كان هذا التحذير إنذاراً دقيقاً بفشل PyInstaller |
+
+### لماذا نقطة الدخول `run.py` لا `app/__main__.py`؟
+
+PyInstaller تشغّل ملفَ نقطة الدخول باسم `__main__` **بلا سياق حزمة**
+(`__package__ = None`). و`app/__main__.py` كلّه استيرادات نسبية
+(`from . import config` …) وهي صحيحة عند `python -m app` لأن المفسّر يمنحها
+السياق — لكنها تسقط في النسخة المحزومة:
+
+```
+ImportError: attempted relative import with no known parent package
+```
+
+فصارت نقطة الدخول `run.py` في جذر المشروع: يستورد `app` استيراداً **مطلقاً**
+فتنال الحزمة سياقها. و`python -m app` يعمل كما كان بلا تغيير.
+
+ويحرس ذلك `tests/test_entrypoint.py`: يشغّل الملفّين مباشرةً (`python file.py`
+لا `-m`) — وهي صورة تشغيل PyInstaller نفسها — فيتحقّق أن `run.py` ينجح وأن
+`app/__main__.py` **يسقط**. والثاني ليس حشواً: به يُعرف أن الأول يقيس العطب
+نفسه لا شيئاً مجاوراً له.
+
+### ولماذا لا يُكتب على `sys.stdout` مباشرةً؟
+
+في نسخة نافذية (`console=False`) يجعل ويندوز `sys.stdout` و`sys.stderr`
+قيمتهما `None`. فكل فشل إقلاع كان يُخفي سببَه خلف انهيار معالج الخطأ نفسه.
+
+صار التطبيق يوصل الخطأ بثلاث قنوات: المجرى إن وُجد، **وملف السجلّ دائماً**،
+**ونافذة رسالة عربية** تُرى بلا شاشة أوامر.
 
 ### لماذا تُنادى الأدوات بـ `python -m` لا بأسمائها؟
 
