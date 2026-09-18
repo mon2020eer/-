@@ -10,7 +10,7 @@ import csv
 import datetime
 
 from ..core import db, features, money, session
-from ..repositories import maintenance_repo, settings_repo
+from ..repositories import expenses_repo, maintenance_repo, settings_repo
 
 _RATE = money.RATE_SCALE
 
@@ -105,7 +105,7 @@ def monthly_revenue(months=12, conn=None):
 
 @features.requires_feature("reports")
 def revenue_report(start_date, end_date, conn=None):
-    """تقرير إيرادات فترة: العقود والمقبوض والمتبقّي ومصاريف الصيانة."""
+    """تقرير إيرادات فترة: العقود والمقبوض والمتبقّي ومصروفات الأسطول."""
     contracted = db.scalar(
         """SELECT COALESCE(SUM(total_amount * rate_to_base / ?), 0)
              FROM contracts
@@ -147,7 +147,14 @@ def revenue_report(start_date, end_date, conn=None):
         default=0,
     )
 
+    # تكلفة الفترة تُقرأ من **دفتر التكاليف الموحّد** لا من سجلّ الصيانة وحده:
+    # منذ وحدة تحليل الربحية صار المكتب يسجّل الإطارات والزيت والتأمين في دفتر
+    # المصروفات، ولو بقي هذا التقرير على الصيانة وحدها لأعطت الشاشتان رقمين
+    # مختلفين عن الشيء نفسه — وصاحب المكتب لا يملك ما يرجّح بينهما.
+    #
+    # ويبقى ``maintenance_cost`` مستقلّاً إلى جانبه لمن يريد تفصيل الورشة وحدها.
     maintenance = maintenance_repo.maintenance_cost_total(start_date, end_date, conn=conn)
+    expenses = expenses_repo.expenses_total(start_date, end_date, conn=conn)
 
     return {
         "start_date": start_date,
@@ -156,7 +163,8 @@ def revenue_report(start_date, end_date, conn=None):
         "contracted": int(contracted),
         "collected": int(collected),
         "maintenance_cost": int(maintenance),
-        "net": int(collected) - int(maintenance),
+        "expenses_cost": int(expenses),
+        "net": int(collected) - int(expenses),
         "outstanding": int(outstanding),
     }
 

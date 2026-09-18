@@ -32,9 +32,10 @@ _LTR_RUN_PATTERN = re.compile(
 
 # ألوان حالة الصفوف في الجداول. فاتحة عمداً: النصّ فوقها داكن (#1f2937) فيبقى
 # مقروءاً، ولونٌ غامق كان يجعل الجدول لوحةً لا يُقرأ منها شيء.
-ROW_DANGER = QColor("#fee2e2")     # محظور — أحمر فاتح
-ROW_ACTIVE = QColor("#dcfce7")     # يستأجر الآن — أخضر فاتح
+ROW_DANGER = QColor("#fee2e2")     # محظور / خسارة — أحمر فاتح
+ROW_ACTIVE = QColor("#dcfce7")     # يستأجر الآن / ربح — أخضر فاتح
 ROW_MUTED = QColor("#f1f5f9")      # مُلغى / خارج الخدمة — رمادي
+ROW_WARNING = QColor("#fef3c7")    # قيد الاسترداد / يحتاج انتباهاً — كهرماني فاتح
 
 STATUS_BADGE_IDS = {
     "available": "badgeAvailable",
@@ -357,23 +358,27 @@ class DataTable(QTableView):
         self._stretch_column = stretch_column
         self.verticalHeader().setDefaultSectionSize(34)
 
-    def fill(self, rows, formatter=None, row_color=None):
+    def fill(self, rows, formatter=None, row_color=None, cell_color=None):
         """يملأ الجدول.
 
-        ``formatter`` دالة (صفّ، مفتاح) ← نصّ العرض.
+        ``formatter``  دالة (صفّ، مفتاح) ← نصّ العرض.
         ``row_color``  دالة (صفّ) ← ``QColor`` تُلوَّن بها خلفية الصفّ كلّه،
                        أو ``None`` فيبقى الصفّ بلونه المعتاد.
+        ``cell_color`` دالة (صفّ، مفتاح) ← ``QColor`` لخليّة واحدة بعينها،
+                       أو ``None``.
 
-        التلوين على مستوى الصفّ لا الخليّة: حالةُ العميل (محظور، مستأجر اليوم)
-        صفةٌ للسطر كلّه، وتلوين خليّة واحدة يجعل العين تبحث عن أيّ عمود يحمل
-        الخبر.
+        **متى يُلوَّن الصفّ ومتى تُلوَّن الخليّة؟** حالةٌ تصف السطر كلّه (عميل
+        محظور، عقد ملغى) تُلوَّن صفّاً: تلوين خليّة واحدة حينها يجعل العين
+        تبحث عن أيّ عمود يحمل الخبر. أمّا رقمٌ بعينه هو الخبر — صافي ربح
+        سالب في تقرير الربحية — فتُلوَّن خليّته وحدها، فيقود اللونُ العينَ
+        إلى الرقم المقصود لا إلى السطر كلّه.
         """
         self.model_.removeRows(0, self.model_.rowCount())
 
         # التلوين المتناوب يطمس لون الصفّ المقصود: صفٌّ أحمر في موضع زوجي
         # كان يخرج بلون بين الأحمر والرمادي لا يُميَّز من جاره. فيُطفأ حين
         # يكون للجدول ألوان حالة، ويبقى حيثما لا ألوان.
-        self.setAlternatingRowColors(row_color is None)
+        self.setAlternatingRowColors(row_color is None and cell_color is None)
 
         for row in rows:
             items = []
@@ -405,6 +410,18 @@ class DataTable(QTableView):
             if color is not None:
                 for item in items:
                     item.setBackground(color)
+
+            # لون الخليّة يعلو لون الصفّ: الأخصّ أولى بالتطبيق من الأعمّ
+            if cell_color is not None:
+                for item, (key, _) in zip(items, self._headers):
+                    tint = cell_color(row, key)
+                    if tint is not None:
+                        item.setBackground(tint)
+                        # الرقم الملوَّن هو خبر الصفّ، فيُعرض غليظاً ليُقرأ
+                        # من نظرة واحدة على جدول من ثلاثين سيارة
+                        font = item.font()
+                        font.setBold(True)
+                        item.setFont(font)
 
             self.model_.appendRow(items)
 

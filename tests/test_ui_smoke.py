@@ -176,7 +176,8 @@ def test_staff_sees_fewer_pages(gui, conn, admin):
 @pytest.mark.parametrize(
     "page_name",
     ["dashboard_page", "contracts_page", "customers_page", "vehicles_page",
-     "maintenance_page", "reports_page", "users_page", "backup_page", "settings_page"],
+     "maintenance_page", "reports_page", "profitability_page", "users_page",
+     "backup_page", "settings_page"],
 )
 def test_every_page_refreshes_without_error(gui, page_name):
     """كل صفحة تُبنى وتُحدَّث ببيانات حقيقية دون أي استثناء."""
@@ -826,3 +827,166 @@ def test_long_pages_do_not_scroll_when_there_is_room(gui, conn, admin,
     assert not area.verticalScrollBar().isVisible(), (
         "شريط تمرير ظاهر بلا داع في %s على شاشة 1080" % class_name
     )
+
+
+# ---------------------------------------------------------------------------
+# تقرير أداء وربحية السيارات: التلوين هو الرسالة
+# ---------------------------------------------------------------------------
+def _select_row(table, gui, row=0):
+    """يختار صفّاً في جدول ويُرجع معرّفه.
+
+    لا يُستعمل ``QTableView.selectRow`` هنا: في واجهةٍ من اليمين إلى اليسار
+    يستنتج Qt العمودَ المقصود من **عرض منطقة العرض** (``viewport``)، وهو صفر
+    في بيئة اختبار بلا شاشة — فلا يقع اختيار أصلاً، ويمضي الاختبار على جدول
+    بلا تحديد فيظنّ أنّه فحص شيئاً. والاختيار عبر نموذج التحديد مباشرةً لا
+    يعتمد على هندسة العرض، فيصف ما يفعله المستخدم بلا هشاشة.
+    """
+    from PyQt6.QtCore import QItemSelectionModel
+
+    index = table.model_.index(row, 0)
+    table.selectionModel().select(
+        index,
+        QItemSelectionModel.SelectionFlag.Select
+        | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    gui.processEvents()
+    return table.selected_id()
+
+
+def _seed_profitability(conn, customer_id, vehicle_id):
+    """سيارة «حفرة مال»: إيراد يومين وتكلفة إصلاح تبتلعه."""
+    from app.repositories import expenses_repo, vehicles_repo
+    from app.services import rental_service
+
+    pit = vehicles_repo.create(
+        {"brand": "نيسان", "model": "صني", "year": 2015, "plate_number": "9-90909",
+         "color": "أبيض", "daily_rate": 10000, "currency_code": "LYD",
+         "purchase_price": 2_000_000, "purchase_date": "2023-01-10"},
+        conn=conn,
+    )
+
+    start = datetime.date.today() - datetime.timedelta(days=40)
+    rental_service.open_contract(
+        customer_id, pit, start.isoformat(),
+        (start + datetime.timedelta(days=2)).isoformat(), conn=conn,
+    )
+    expenses_repo.add_expense(pit, "maintenance", 400000,
+                              date=(start + datetime.timedelta(days=5)).isoformat(),
+                              notes="إصلاح ناقل الحركة", conn=conn)
+    return pit
+
+
+def test_profitability_report_colours_the_net_profit_cell(gui, conn, sample_customer,
+                                                          sample_vehicle):
+    """خليّة صافي الربح حمراء للحفرة المالية — وهي كل رسالة الشاشة.
+
+    يُفحص اللون لا وجود العمود: تقريرٌ يعرض الرقم الصحيح بلا تمييزٍ بصري
+    يجعل صاحب المكتب يقرأ ثلاثين سطراً ليجد السطر الذي يهمّه.
+    """
+    from app.ui.pages.profitability_page import STATUS_COLORS, ProfitabilityPage
+    from app.services import profitability
+
+    pit = _seed_profitability(conn, sample_customer, sample_vehicle)
+
+    page = ProfitabilityPage()
+    page.refresh()
+    gui.processEvents()
+
+    net_column = next(index for index, (key, _) in enumerate(page.table._headers)
+                      if key == "net_profit")
+    assert page.table.model_.rowCount() >= 2
+
+    # الترتيب الافتراضي يضع الأسوأ أولاً، فالحفرة في الصفّ الأول
+    assert page._rows[0]["vehicle_id"] == pit
+    colour = page.table.model_.item(0, net_column).background().color()
+    assert colour == STATUS_COLORS[profitability.STATUS_MONEY_PIT]
+    assert page.table.model_.item(0, net_column).font().bold()
+
+    page.deleteLater()
+
+
+def test_profitability_report_filters_to_money_pits(gui, conn, sample_customer,
+                                                    sample_vehicle):
+    from app.ui.pages.profitability_page import ProfitabilityPage
+
+    pit = _seed_profitability(conn, sample_customer, sample_vehicle)
+
+    page = ProfitabilityPage()
+    page.only_pits.setChecked(True)
+    gui.processEvents()
+
+    assert [row["vehicle_id"] for row in page._rows] == [pit]
+    assert page.table.model_.rowCount() == 1
+    page.deleteLater()
+
+
+def test_profitability_detail_shows_the_cost_ledger(gui, conn, sample_customer,
+                                                    sample_vehicle):
+    """لوحة التفاصيل تجيب «في ماذا صُرف؟» لا «كم صُرف؟» وحدها."""
+    from app.ui.pages.profitability_page import ProfitabilityPage
+
+    _seed_profitability(conn, sample_customer, sample_vehicle)
+
+    page = ProfitabilityPage()
+    page.refresh()
+    assert _select_row(page.table, gui) is not None
+
+    assert page.breakdown_table.model_.rowCount() >= 1
+    assert page.ledger_table.model_.rowCount() >= 1
+    assert "صافي الربح التشغيلي" in page.detail_body.text()
+    page.deleteLater()
+
+
+def test_vehicle_details_offers_an_expense_button(gui, conn):
+    """زرّ «إضافة مصروف / صيانة» في ملفّ السيارة — حيث يقف من يمسك الفاتورة."""
+    from app.ui.pages.vehicles_page import VehiclesPage
+
+    page = VehiclesPage()
+    page.refresh()
+    page.show()
+    gui.processEvents()
+    assert _select_row(page.table, gui) is not None
+
+    assert page.expense_button.isVisible()
+    assert page.expense_button.isEnabled()
+    page.close()
+    page.deleteLater()
+
+
+def test_the_expense_button_hides_outside_the_pro_tier(gui, conn):
+    """في النسخة الأساسية لا وحدة ربحية، فلا زرّ يَعِد بما لا يُنفَّذ."""
+    from app.core import features
+    from app.ui.pages.vehicles_page import VehiclesPage
+
+    features.set_tier(features.TIER_BASIC)
+    try:
+        page = VehiclesPage()
+        page.refresh()
+        page.show()
+        gui.processEvents()
+        _select_row(page.table, gui)
+        assert not page.expense_button.isVisible()
+        page.close()
+        page.deleteLater()
+    finally:
+        features.set_tier(features.TIER_PRO)
+
+
+def test_expense_dialog_saves_and_moves_the_numbers(gui, conn, sample_vehicle):
+    """الحوار يكتب في الدفتر، والتقرير يقرأ ما كُتب فوراً."""
+    from app.core import money
+    from app.repositories import vehicles_repo
+    from app.services import profitability
+    from app.ui.widgets.expense_dialog import ExpenseDialog
+
+    vehicle = vehicles_repo.get(sample_vehicle, conn=conn)
+    dialog = ExpenseDialog(None, vehicle=vehicle)
+    dialog.expense_type.setCurrentIndex(dialog.expense_type.findData("tyres"))
+    dialog.amount.setValue(float(money.to_major(90000)))
+    dialog.notes.setPlainText("أربعة إطارات")
+    dialog._save()
+    gui.processEvents()
+
+    report = profitability.vehicle_profitability(sample_vehicle, conn=conn)
+    assert report["total_expenses"] == 90000
+    dialog.deleteLater()

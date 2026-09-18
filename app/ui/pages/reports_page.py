@@ -87,8 +87,10 @@ class ReportsPage(QWidget):
         self.card_contracted = StatCard("قيمة العقود", "0", accent="#16243c")
         self.card_collected = StatCard("المحصَّل فعلياً", "0", accent="#16a34a")
         self.card_outstanding = StatCard("لم يُحصَّل بعد", "0", accent="#dc2626")
-        self.card_maintenance = StatCard("مصاريف الصيانة", "0", accent="#ea580c")
-        self.card_net = StatCard("الصافي بعد الصيانة", "0", accent="#4f46e5")
+        # «المصروفات والصيانة» لا «مصاريف الصيانة»: البطاقة تجمع دفتر تكاليف
+        # السيارات وسجلّ الصيانة معاً، فتسميتها بأحد مصدريها تُنقص ما تعرضه.
+        self.card_maintenance = StatCard("المصروفات والصيانة", "0", accent="#ea580c")
+        self.card_net = StatCard("الصافي بعد المصروفات", "0", accent="#4f46e5")
 
         for column, card in enumerate(
             (self.card_contracts, self.card_contracted, self.card_collected,
@@ -336,7 +338,7 @@ class ReportsPage(QWidget):
                 money.format_amount(max(report["outstanding"], 0), self._symbol)
             )
             self.card_maintenance.set_value(
-                money.format_amount(report["maintenance_cost"], self._symbol)
+                money.format_amount(report["expenses_cost"], self._symbol)
             )
             self.card_net.set_value(money.format_amount(report["net"], self._symbol))
 

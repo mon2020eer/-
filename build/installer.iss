@@ -12,7 +12,7 @@
 
 #define AppName "منظومة إدارة مكتب إيجار السيارات"
 #define AppNameEn "CarRentalOffice"
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.0"
 #define AppExe "CarRentalOffice.exe"
 #define AppPublisher "شركة المسار المتحد"
 

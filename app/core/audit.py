@@ -33,6 +33,7 @@ ENTITY_LABELS = {
     "contract": "عقد",
     "payment": "دفعة",
     "maintenance": "صيانة",
+    "vehicle_expense": "مصروف سيارة",
     "violation": "مخالفة",
     "backup": "نسخة احتياطية",
     "settings": "إعدادات",

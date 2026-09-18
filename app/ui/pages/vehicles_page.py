@@ -8,19 +8,30 @@ from PyQt6.QtWidgets import (
 )
 
 from ... import config
-from ...core import money, session
+from ...core import features, money, session
 from ...repositories import settings_repo, vehicles_repo
 from ...services import pricing
 from ..widgets.common import (
     Card, DataTable, FormDialog, PageHeader, combo, confirm, date_field,
-    fix_dates, money_field, primary_button, search_box, show_error, show_info,
+    date_value, fix_dates, money_field, optional_date_field, primary_button,
+    search_box, show_error, show_info,
 )
+from ..widgets.expense_dialog import ExpenseDialog
 
 
 def _optional(row, key):
     """يقرأ عموداً قد يغيب في قاعدة لم تُرقَّ بعد، ويُرجع نصّاً دائماً."""
     value = row[key] if key in row.keys() else None
     return "" if value is None else str(value)
+
+
+def _optional_int(row, key):
+    """مثل ``_optional`` لكن للأعمدة الرقمية، ويُرجع صفراً عند الغياب."""
+    value = row[key] if key in row.keys() else None
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 class VehicleDialog(FormDialog):
@@ -82,6 +93,11 @@ class VehicleDialog(FormDialog):
         self.has_inspection.toggled.connect(self.inspection_expiry.setEnabled)
         self.inspection_expiry.setEnabled(False)
 
+        # رأس المال المستثمر: مقام نسبة عائد الاستثمار في تقرير الربحية.
+        # يبقى فارغاً لمن لا يعرف الثمن — وصفرٌ هنا يعني «غير مسجَّل» لا «مجّاناً».
+        self.purchase_price = money_field()
+        self.purchase_date = optional_date_field()
+
         self.notes = QPlainTextEdit()
         self.notes.setMaximumHeight(70)
 
@@ -105,6 +121,8 @@ class VehicleDialog(FormDialog):
         form.addRow("انتهاء التأمين", self.insurance_expiry)
         form.addRow("", self.has_inspection)
         form.addRow("انتهاء الفحص الفنّي", self.inspection_expiry)
+        form.addRow("تكلفة الشراء (اتركها صفراً إن لم تكن معروفة)", self.purchase_price)
+        form.addRow("تاريخ الشراء", self.purchase_date)
         form.addRow("ملاحظات", self.notes)
 
         hint = QLabel(
@@ -112,7 +130,9 @@ class VehicleDialog(FormDialog):
             " ولن يدفع العميل عن أيام متبقّية أكثر من ثمن أسبوع كامل.\n"
             "وسعر الساعة يُستعمل عند الإرجاع المبكّر؛ إن تُرك صفراً حُسب تلقائياً"
             " بقسمة السعر اليومي على 24.\n"
-            "وتواريخ التأمين والفحص تُنبّهك قبل انتهائها بمدّة تضبطها في الإعدادات."
+            "وتواريخ التأمين والفحص تُنبّهك قبل انتهائها بمدّة تضبطها في الإعدادات.\n"
+            "وتكلفة الشراء وتاريخه أساس تقرير ربحية السيارة وعائد استثمارها؛"
+            " بدونهما يُحسب الربح التشغيلي ولا تُحسب نسبة استرداد رأس المال."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -135,6 +155,13 @@ class VehicleDialog(FormDialog):
         self.odometer.setValue(int(row["odometer"] or 0))
         self.chassis.setText(row["chassis_number"] or "")
         self.notes.setPlainText(row["notes"] or "")
+
+        self.purchase_price.setValue(
+            float(money.to_major(_optional_int(row, "purchase_price")))
+        )
+        purchase_date = _optional(row, "purchase_date")
+        if purchase_date:
+            self.purchase_date.setDate(QDate.fromString(purchase_date, "yyyy-MM-dd"))
 
         self.body_style.setText(_optional(row, "body_style"))
         self._load_expiry(self.has_license, self.license_expiry,
@@ -171,6 +198,10 @@ class VehicleDialog(FormDialog):
             "insurance_expiry": self._expiry(self.has_insurance, self.insurance_expiry),
             "inspection_expiry": self._expiry(self.has_inspection,
                                               self.inspection_expiry),
+            # صفرٌ في الحقل يُحفظ ``None`` لا ``0``: الفرق بين «لا نعرف الثمن»
+            # و«كلّفت صفراً» هو الفرق بين نسبة عائد صحيحة ونسبة كاذبة.
+            "purchase_price": money.to_minor(self.purchase_price.value()) or None,
+            "purchase_date": date_value(self.purchase_date),
             "notes": self.notes.toPlainText().strip() or None,
         }
 
@@ -273,6 +304,11 @@ class VehiclesPage(QWidget):
         buttons = QHBoxLayout()
         self.edit_button = QPushButton("تعديل")
         self.edit_button.clicked.connect(self._edit)
+        # زرّ المصروف في ملفّ السيارة لا في شاشة التقارير وحدها: الموظّف الذي
+        # يمسك فاتورة الورشة يكون أمام ملفّ السيارة، ولو طُلب منه أن يبحث عن
+        # شاشة أخرى لتسجيلها لبقيت الفاتورة في الدرج وبقي التقرير ناقصاً.
+        self.expense_button = QPushButton("+ إضافة مصروف / صيانة")
+        self.expense_button.clicked.connect(self._add_expense)
         self.maintenance_button = QPushButton("نقل إلى الصيانة")
         self.maintenance_button.clicked.connect(lambda: self._set_status("maintenance"))
         self.available_button = QPushButton("إتاحة")
@@ -281,13 +317,20 @@ class VehiclesPage(QWidget):
         self.delete_button.setObjectName("danger")
         self.delete_button.clicked.connect(self._delete)
 
-        for button in (self.edit_button, self.maintenance_button,
-                       self.available_button, self.delete_button):
+        for button in (self.edit_button, self.expense_button,
+                       self.maintenance_button, self.available_button,
+                       self.delete_button):
             buttons.addWidget(button)
         buttons.addStretch(1)
 
+        # سطر الربحية: خلاصة تقرير الأداء في موضع القرار — أمام ملفّ السيارة
+        self.profit_label = QLabel("")
+        self.profit_label.setObjectName("hint")
+        self.profit_label.setWordWrap(True)
+
         detail_card.body.addWidget(self.detail_title)
         detail_card.body.addWidget(self.detail_body)
+        detail_card.body.addWidget(self.profit_label)
         detail_card.body.addLayout(buttons)
         self.reservations_label = QLabel("الحجوزات القادمة")
         self.reservations_table = DataTable(
@@ -317,6 +360,9 @@ class VehiclesPage(QWidget):
         self._detail_state = (bool(enabled), status)
         enabled = bool(enabled) and not self._read_only
         self.edit_button.setEnabled(enabled)
+        # دفتر التكاليف جزء من وحدة تحليل الربحية: يُخفى الزرّ حيث لا وحدة
+        self.expense_button.setVisible(features.has_feature("profitability"))
+        self.expense_button.setEnabled(enabled)
         self.maintenance_button.setEnabled(enabled and status == "available")
         self.available_button.setEnabled(enabled and status == "maintenance")
         self.delete_button.setEnabled(enabled and session.has_role("admin"))
@@ -357,6 +403,7 @@ class VehiclesPage(QWidget):
         if vehicle is None:
             self.detail_title.setText("اختر سيارة لعرض تفاصيلها")
             self.detail_body.setText("")
+            self.profit_label.setText("")
             self.history_table.fill([])
             self.reservations_table.fill([])
             self._set_detail_enabled(False)
@@ -387,6 +434,8 @@ class VehiclesPage(QWidget):
             )
         ))
 
+        self.profit_label.setText(fix_dates(self._profit_line(vehicle)))
+
         reservations = vehicles_repo.upcoming_reservations(vehicle["id"])
         self.reservations_table.fill(reservations)
         self.reservations_label.setText(
@@ -396,6 +445,37 @@ class VehiclesPage(QWidget):
 
         self.history_table.fill(vehicles_repo.history(vehicle["id"]))
         self._set_detail_enabled(True, vehicle["status"])
+
+    def _profit_line(self, vehicle):
+        """سطر ربحية السيارة كما يظهر تحت تفاصيلها.
+
+        خلاصةٌ لا تقرير: الرقم الذي يُتّخذ عنده قرار الإبقاء أو البيع، وتفصيلُه
+        كلّه في شاشة «ربحية السيارات». ويُسكت عنه في النسخة الأساسية لأن
+        الوحدة كلّها خارجها — لا رسالة ترقية في منتصف ملفّ سيارة.
+        """
+        if not features.has_feature("profitability"):
+            return ""
+
+        from ...services import profitability
+
+        try:
+            report = profitability.vehicle_profitability(vehicle["id"])
+        except Exception:
+            return ""          # خللٌ في تقرير مساعد لا يُفرغ ملفّ السيارة
+        if report is None:
+            return ""
+
+        symbol = settings_repo.base_currency()["symbol"]
+        line = "الربحية: إيراد %s − مصروفات %s = صافي %s" % (
+            money.format_amount(report["total_revenue"], symbol),
+            money.format_amount(report["total_expenses"], symbol),
+            money.format_amount(report["net_profit"], symbol),
+        )
+        if report["recovery_ratio"] is not None:
+            line += "  ·  استُرد %s٪ من تكلفة الشراء" % report["recovery_ratio"]
+        if report["is_money_pit"]:
+            line += "\n⚠ تكاليف هذه السيارة تجاوزت ما أنتجته."
+        return line
 
     # ------------------------------------------------------------------
     def _add(self):
@@ -407,6 +487,15 @@ class VehiclesPage(QWidget):
         if vehicle is None:
             return
         if VehicleDialog(self, vehicle).exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+
+    def _add_expense(self):
+        """يفتح حوار إدخال مصروف على السيارة المختارة."""
+        vehicle = self._selected()
+        if vehicle is None:
+            show_error(self, "اختر سيارة أولاً.")
+            return
+        if ExpenseDialog(self, vehicle=vehicle).exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
     def _set_status(self, status):

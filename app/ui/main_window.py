@@ -25,6 +25,7 @@ from .pages.contracts_page import ContractsPage
 from .pages.customers_page import CustomersPage
 from .pages.dashboard_page import DashboardPage
 from .pages.maintenance_page import MaintenancePage
+from .pages.profitability_page import ProfitabilityPage
 from .pages.reports_page import ReportsPage
 from .pages.settings_page import SettingsPage
 from .pages.users_page import UsersPage
@@ -173,6 +174,9 @@ class MainWindow(QMainWindow):
             ("الصيانة والمخالفات", MaintenancePage, ("admin", "staff"), "maintenance"),
             ("التنبيهات", AlertsPage, ("admin", "staff"), "alerts"),
             ("التقارير", ReportsPage, ("admin",), "reports"),
+            # ربحية السيارات للمدير وحده: تكلفة الشراء وصافي ربح كل سيارة
+            # معلومة مالك المكتب، لا تُعرض على من يقف خلف الكاونتر.
+            ("ربحية السيارات", ProfitabilityPage, ("admin",), "profitability"),
             ("المستخدمون", UsersPage, ("admin",), "multi_user"),
             ("النسخ الاحتياطي", BackupPage, ("admin",), "cloud_backup"),
             ("الاشتراك", SubscriptionPage, ("admin",), None),

@@ -21,6 +21,33 @@ def _add_column(conn, table, column, definition):
         conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, definition))
 
 
+def _drop_views(conn):
+    """يُسقط كل العروض قبل تطبيق أي ترقية.
+
+    **العروض مشتقّة لا مخزونة**: لا صفّ فيها ولا بيانات، ويُعاد بناؤها كاملةً
+    من ``schema.sql`` في كل إقلاع (``db.initialize``). وإسقاطها قبل الترقية
+    يزيل صنفاً كاملاً من الأعطال كانت المنظومة قد اصطدمت به مرّتين:
+
+      • **عرضٌ يعترض طريق DDL.** SQLite ترفض ``DROP TABLE`` أو ``RENAME`` ما دام
+        عرضٌ قائم يذكر الجدول، فتنهار إعادةُ بناء جدول العملاء برسالة مُضلّلة
+        «no such table: main.customers».
+
+      • **عرضٌ من مخطّط الغد فوق جدول اليوم.** ``db.initialize`` ينفّذ
+        ``schema.sql`` **قبل** الترقيات، فيُنشأ على قاعدة قديمة عرضٌ يذكر عموداً
+        لم يُضَف بعد. وSQLite لا تتحقّق من أعمدة العرض عند إنشائه، لكنّها تتحقّق
+        منها عند أول ``DROP TABLE`` بعده — فيُفشل عرضٌ معطوب ترقيةً لا علاقة له
+        بها («error in view …: no such column»).
+
+    ولذلك تُسقط هنا **كلّها** لا ما تذكره كل ترقية باسمه: القاعدة العامّة أمتن
+    من قائمة تُنسى. والإسقاط يقع داخل معاملة الترقية، فترقيةٌ تتعثّر تُعيد
+    العروض كما كانت — DDL في SQLite يتراجع مع المعاملة كالبيانات سواء.
+    """
+    for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'view'"
+    ).fetchall():
+        conn.execute('DROP VIEW IF EXISTS "%s"' % row[0])
+
+
 def _migration_1(conn):
     """الإصدار الأول: المخطط كاملٌ في schema.sql، فلا شيء إضافي هنا."""
     return None
@@ -184,12 +211,61 @@ def _migration_4(conn):
     conn.execute("DROP VIEW IF EXISTS v_contracts_full")
 
 
+def _migration_5(conn):
+    """وحدة تحليل ربحية السيارات وعائد الاستثمار.
+
+    المنظومة كانت تعرف كم **دخل** من كل سيارة ولا تعرف كم **خرج** عليها ولا
+    بكم اشتُريت، فيتعذّر أن تقول أيّ سيارة تكسب وأيّها حفرة يسقط فيها المال.
+    وهذا ما تضيفه هذه الترقية:
+
+      1. ``purchase_price`` و``purchase_date`` في جدول السيارات — رأس المال
+         المستثمر، وهو مقام نسبة استرداده.
+      2. جدول ``vehicle_expenses`` — دفتر ما يُصرف على السيارة: صيانة وإطارات
+         وزيت وتأمين وغيرها.
+
+    **غير هدّامة بالتعريف**: ``ALTER TABLE ADD COLUMN`` لا يعيد بناء جدولاً،
+    و``CREATE TABLE IF NOT EXISTS`` لا يمسّ جدولاً قائماً. فلا يُحذف صفٌّ ولا
+    يتغيّر معرّف، وبيانات المكتب بعدها هي بيانات المكتب قبلها حرفاً بحرف.
+
+    ولا قيمة افتراضية لثمن الشراء عمداً: ``NULL`` تعني «لا يعرف المكتب الثمن»،
+    وصفرٌ يعني «كلّفت صفراً» — والفرق بينهما نسبةُ عائدٍ صحيحة ونسبةٌ كاذبة.
+    """
+    _add_column(conn, "vehicles", "purchase_price", "INTEGER")
+    _add_column(conn, "vehicles", "purchase_date", "TEXT")
+
+    # المفتاح الأجنبي على العملات يبقى معطَّلاً عن جداول قديمة؟ لا: الجدول
+    # جديد كلّه، ويُنشأ بقيوده كاملة كما في schema.sql حرفاً بحرف.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS vehicle_expenses (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicle_id    INTEGER NOT NULL REFERENCES vehicles (id) ON DELETE CASCADE,
+            expense_type  TEXT    NOT NULL DEFAULT 'other'
+                                  CHECK (expense_type IN ('maintenance', 'tyres', 'oil',
+                                                          'insurance', 'other')),
+            amount        INTEGER NOT NULL CHECK (amount >= 0),
+            currency_code TEXT    NOT NULL REFERENCES currencies (code),
+            rate_to_base  INTEGER NOT NULL DEFAULT 1000000 CHECK (rate_to_base > 0),
+            date          TEXT    NOT NULL,
+            notes         TEXT,
+            created_by    INTEGER REFERENCES users (id),
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_expenses_vehicle ON vehicle_expenses (vehicle_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_expenses_date ON vehicle_expenses (date)"
+    )
+
+
 # (رقم الإصدار، الدالة) بترتيب تصاعدي
 MIGRATIONS = [
     (1, _migration_1),
     (2, _migration_2),
     (3, _migration_3),
     (4, _migration_4),
+    (5, _migration_5),
 ]
 
 
@@ -215,6 +291,7 @@ def _apply_one(conn, target, migrate):
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            _drop_views(conn)
             migrate(conn)
             # PRAGMA لا يقبل المعاملات (parameters)، والقيمة رقم مُولَّد داخلياً.
             # وهو جزء من ترويسة القاعدة، فيتراجع مع المعاملة كبقيّة التغييرات.

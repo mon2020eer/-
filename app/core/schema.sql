@@ -104,6 +104,12 @@ CREATE TABLE IF NOT EXISTS vehicles (
     insurance_policy_no TEXT,
     insurance_expiry    TEXT,                         -- YYYY-MM-DD
     inspection_expiry   TEXT,                         -- الفحص الفنّي، YYYY-MM-DD
+    -- رأس المال المستثمر في السيارة: أساس حساب عائد الاستثمار (ROI).
+    -- بعملة السيارة نفسها (currency_code أعلاه)، وبالوحدة الصغرى كبقيّة المبالغ.
+    -- يبقى NULL للسيارات التي لا يعرف المكتب ثمن شرائها، وتقرير الربحية
+    -- يعرضها حينئذٍ بربح تشغيلي بلا نسبة استرداد — لا برقم مُختلَق.
+    purchase_price      INTEGER CHECK (purchase_price IS NULL OR purchase_price >= 0),
+    purchase_date       TEXT,                         -- تاريخ الشراء، YYYY-MM-DD
     notes         TEXT,
     created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
@@ -218,6 +224,36 @@ CREATE TABLE IF NOT EXISTS maintenance_records (
 );
 
 -- -----------------------------------------------------------------------------
+-- مصروفات السيارة: دفتر التكاليف الذي تقوم عليه وحدة تحليل الربحية
+--
+--  لماذا جدول مستقلّ عن ``maintenance_records``؟ لأنّ سجلّ الصيانة يصف **حدثاً
+--  تشغيلياً** له بداية ونهاية وينقل السيارة إلى حالة «في الصيانة»، بينما هذا
+--  الجدول يصف **مبلغاً صُرف** لا أكثر: إطارات تُشترى، وزيت يُغيَّر، ووثيقة
+--  تأمين تُجدَّد — ولا شيء من ذلك يوقف السيارة عن العمل.
+--
+--  ولا يُلغي أحدهما الآخر: تقرير الربحية يجمع **المصدرين معاً** عبر العرض
+--  ``v_vehicle_expense_ledger``، فلا تُحتسب تكلفةُ ورشةٍ سُجّلت في شاشة
+--  الصيانة صفراً في حساب الربح.
+--
+--  ``rate_to_base`` لقطةُ سعر صرف يوم الصرف على غرار العقود: تقريرُ ربحية
+--  سيارةٍ اشتُريت قبل سنتين لا يجوز أن تتغيّر أرقامه كلّما عُدِّل سعر الصرف.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS vehicle_expenses (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    vehicle_id    INTEGER NOT NULL REFERENCES vehicles (id) ON DELETE CASCADE,
+    expense_type  TEXT    NOT NULL DEFAULT 'other'
+                          CHECK (expense_type IN ('maintenance', 'tyres', 'oil',
+                                                  'insurance', 'other')),
+    amount        INTEGER NOT NULL CHECK (amount >= 0),
+    currency_code TEXT    NOT NULL REFERENCES currencies (code),
+    rate_to_base  INTEGER NOT NULL DEFAULT 1000000 CHECK (rate_to_base > 0),
+    date          TEXT    NOT NULL,                    -- تاريخ الصرف، YYYY-MM-DD
+    notes         TEXT,
+    created_by    INTEGER REFERENCES users (id),
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+-- -----------------------------------------------------------------------------
 -- المخالفات المرورية المرصودة أثناء فترة الإيجار
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS violations (
@@ -293,6 +329,8 @@ CREATE INDEX IF NOT EXISTS ix_customers_phone      ON customers (phone);
 CREATE INDEX IF NOT EXISTS ix_customers_name       ON customers (full_name);
 CREATE INDEX IF NOT EXISTS ix_maintenance_vehicle  ON maintenance_records (vehicle_id);
 CREATE INDEX IF NOT EXISTS ix_violations_vehicle   ON violations (vehicle_id);
+CREATE INDEX IF NOT EXISTS ix_expenses_vehicle    ON vehicle_expenses (vehicle_id);
+CREATE INDEX IF NOT EXISTS ix_expenses_date       ON vehicle_expenses (date);
 CREATE INDEX IF NOT EXISTS ix_audit_created        ON audit_log (created_at);
 CREATE INDEX IF NOT EXISTS ix_attachments_customer ON customer_attachments (customer_id);
 
@@ -356,6 +394,97 @@ JOIN customers          cu ON cu.id = c.customer_id
 JOIN vehicles           v  ON v.id  = c.vehicle_id
 JOIN v_contract_balance b  ON b.contract_id = c.id
 LEFT JOIN users         u  ON u.id  = c.created_by;
+
+-- -----------------------------------------------------------------------------
+-- دفتر تكاليف السيارة موحّداً: المصروفات المُدخَلة يدوياً + تكاليف الصيانة
+--
+--  العرض هو **المصدر الوحيد للتكلفة** في كل حسابات الربحية. جمعُ المصدرين هنا
+--  لا في كل استعلام على حدة يمنع أن يحسب تقريرٌ ما لا يحسبه تقرير آخر.
+--
+--  المبالغ تُحوَّل إلى العملة الأساس: مصروفاتُ اليد بلقطة سعر صرف يوم صرفها،
+--  وتكاليفُ الصيانة بسعر الصرف الحالي لأنّ جدولها لا يحفظ لقطة.
+-- -----------------------------------------------------------------------------
+CREATE VIEW IF NOT EXISTS v_vehicle_expense_ledger AS
+SELECT
+    'expense'                                       AS source,
+    e.id                                            AS id,
+    e.vehicle_id                                    AS vehicle_id,
+    e.expense_type                                  AS expense_type,
+    e.amount                                        AS amount,
+    e.currency_code                                 AS currency_code,
+    e.amount * e.rate_to_base / 1000000             AS amount_base,
+    e.date                                          AS expense_date,
+    e.notes                                         AS notes
+FROM vehicle_expenses e
+UNION ALL
+SELECT
+    'maintenance',
+    m.id,
+    m.vehicle_id,
+    'maintenance',
+    m.cost,
+    m.currency_code,
+    m.cost * COALESCE(c.rate_to_base, 1000000) / 1000000,
+    date(m.started_at),
+    m.description
+FROM maintenance_records m
+LEFT JOIN currencies c ON c.code = m.currency_code;
+
+-- -----------------------------------------------------------------------------
+-- ربحية كل سيارة: رأس المال، والإيراد، والتكلفة، وصافي الربح التشغيلي
+--
+--  معادلة الربحية كما يقرؤها المحاسب:
+--      الإيراد   = مجموع قيمة العقود غير الملغاة   (بلقطة سعر صرف كل عقد)
+--      التكلفة   = مجموع دفتر التكاليف الموحّد أعلاه
+--      الصافي    = الإيراد − التكلفة
+--
+--  **الإيراد قيمة تعاقدية لا نقداً محصَّلاً**: عقدٌ قائم لم يُسدَّد بعد يظلّ
+--  إيراداً مستحقّاً للسيارة. ومن أراد المحصَّل فعلاً فبابه كشف الحساب.
+--
+--  والعقود الملغاة تُستثنى لأنّها لم تُنتج ديناراً ولم تشغل السيارة.
+--
+--  نسبة استرداد رأس المال تُحسب في طبقة الخدمة لا هنا: القسمة على صفر
+--  (سيارة بلا ثمن شراء مسجَّل) قرارٌ عرضٌ لا يحسنه، وصمتُ العرض عنها أصدق
+--  من نسبة مُختلَقة.
+-- -----------------------------------------------------------------------------
+CREATE VIEW IF NOT EXISTS v_vehicle_profitability AS
+SELECT
+    v.id                                            AS vehicle_id,
+    v.plate_number                                  AS plate_number,
+    v.brand                                         AS brand,
+    v.model                                         AS model,
+    v.brand || ' ' || v.model                       AS vehicle_title,
+    v.year                                          AS year,
+    v.color                                         AS color,
+    v.status                                        AS status,
+    v.currency_code                                 AS currency_code,
+    v.purchase_date                                 AS purchase_date,
+    COALESCE(v.purchase_price, 0)
+        * COALESCE(cur.rate_to_base, 1000000) / 1000000  AS purchase_price,
+    v.purchase_price IS NOT NULL                    AS has_purchase_price,
+    COALESCE(rev.contracts_count, 0)                AS contracts_count,
+    COALESCE(rev.rented_days, 0)                    AS rented_days,
+    COALESCE(rev.total_revenue, 0)                  AS total_revenue,
+    COALESCE(exp.total_expenses, 0)                 AS total_expenses,
+    COALESCE(rev.total_revenue, 0)
+        - COALESCE(exp.total_expenses, 0)           AS net_profit
+FROM vehicles v
+LEFT JOIN currencies cur ON cur.code = v.currency_code
+LEFT JOIN (
+    SELECT vehicle_id,
+           COUNT(*)                                 AS contracts_count,
+           SUM(days_count)                          AS rented_days,
+           SUM(total_amount * rate_to_base / 1000000) AS total_revenue
+      FROM contracts
+     WHERE status != 'cancelled'
+     GROUP BY vehicle_id
+) rev ON rev.vehicle_id = v.id
+LEFT JOIN (
+    SELECT vehicle_id,
+           SUM(amount_base)                         AS total_expenses
+      FROM v_vehicle_expense_ledger
+     GROUP BY vehicle_id
+) exp ON exp.vehicle_id = v.id;
 
 -- =============================================================================
 --  المشغّلات (Triggers): تحديث حقل updated_at تلقائياً
