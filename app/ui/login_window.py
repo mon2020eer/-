@@ -137,10 +137,17 @@ class LoginWindow(QWidget):
         version = QLabel("الإصدار %s" % config.APP_VERSION)
         version.setObjectName("loginBrandText")
 
+        # هوية المزوّد: أوّل ما تراه العين عند فتح البرنامج، وهي ثابتة في
+        # الشيفرة فلا شاشة تغيّرها ولا إعداد يحذفها.
+        vendor = QLabel("%s — %s" % (config.VENDOR_TAGLINE, config.VENDOR_NAME))
+        vendor.setObjectName("loginBrandVendor")
+        vendor.setWordWrap(True)
+
         brand_layout.addStretch(1)
         brand_layout.addWidget(title)
         brand_layout.addWidget(description)
         brand_layout.addStretch(2)
+        brand_layout.addWidget(vendor)
         brand_layout.addWidget(version)
 
         # --- نموذج الدخول ---

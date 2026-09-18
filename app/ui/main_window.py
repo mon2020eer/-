@@ -150,6 +150,14 @@ class MainWindow(QMainWindow):
         logout.setCheckable(False)
         logout.clicked.connect(self._logout)
         self._sidebar_layout.addWidget(logout)
+
+        # هوية المزوّد أسفل كل شاشة: يراها الموظّف كل يوم، وتبقى في لقطة
+        # الشاشة التي يرسلها حين يطلب الدعم.
+        vendor = QLabel("%s\n%s" % (config.VENDOR_TAGLINE, config.VENDOR_NAME))
+        vendor.setObjectName("sidebarVendor")
+        vendor.setWordWrap(True)
+        vendor.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._sidebar_layout.addWidget(vendor)
         self._sidebar_layout.addSpacing(10)
 
         return sidebar

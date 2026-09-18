@@ -52,6 +52,15 @@ QMainWindow, QDialog, #contentArea {
     padding: 0 14px 14px 14px;
 }
 
+/* هوية المزوّد: حاضرة لا صارخة. خطٌّ فوقها يفصلها عن أزرار العمل، فتُقرأ
+   توقيعاً لا عنصراً من عناصر الواجهة. */
+#sidebarVendor {
+    color: #7d8ea9;
+    font-size: 11px;
+    padding: 10px 10px 4px 10px;
+    border-top: 1px solid #2a3852;
+}
+
 #navButton {
     background: transparent;
     color: #d5dcea;
@@ -286,6 +295,13 @@ QLabel#badgeDue {
 #loginBrandText {
     color: #9fb0cb;
     font-size: 13px;
+}
+
+#loginBrandVendor {
+    color: #cfd9e8;
+    font-size: 13px;
+    font-weight: bold;
+    padding-bottom: 4px;
 }
 
 #loginTitle {

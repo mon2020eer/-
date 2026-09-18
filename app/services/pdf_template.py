@@ -505,7 +505,7 @@ def sample_values():
         "guarantor_phone": "0913334455",
         "guarantor_work_address": "طرابلس — سوق الجمعة",
 
-        "office_name": "شركة المسار المتحد",
+        "office_name": "مكتب النور لإيجار السيارات",
         "office_phone": "0918887777",
         "office_phone_alt": "0925556677",
         "office_address": "طرابلس — شارع الشط",

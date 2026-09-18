@@ -36,8 +36,18 @@ class SettingsPage(QWidget):
 
         # --- بيانات المكتب ---
         office_card = Card()
-        office_title = QLabel("هوية الشركة (تظهر في ترويسة كل ما يُطبع)")
+        office_title = QLabel("بيانات مكتبك (تظهر في ترويسة كل ما يُطبع)")
         office_title.setObjectName("sectionTitle")
+
+        # التفريق صريحٌ هنا لا مضمر: صاحب المكتب يجب أن يعرف أن ما يكتبه في
+        # هذه الحقول هو **اسمه هو** الذي يوقّع زبونه تحته، لا اسم من باعه
+        # البرنامج. وخلطُ الاثنين يُخرج عقداً يحمل اسم الشركة الخطأ.
+        office_hint = QLabel(
+            "هذه بيانات مكتبك أنت — اسمه وهواتفه وعنوانه وسجلّه التجاري وشعاره."
+            " وهي وحدها ما يُطبع في ترويسة العقود والتقارير."
+        )
+        office_hint.setObjectName("hint")
+        office_hint.setWordWrap(True)
 
         office_form = QFormLayout()
         office_form.setSpacing(10)
@@ -127,14 +137,12 @@ class SettingsPage(QWidget):
         save_button.clicked.connect(self._save)
 
         office_card.body.addWidget(office_title)
+        office_card.body.addWidget(office_hint)
         office_card.body.addLayout(office_form)
         office_card.body.addWidget(self._logo_box())
         office_card.body.addSpacing(10)
         office_card.body.addWidget(backup_title)
         office_card.body.addLayout(backup_form)
-        office_card.body.addSpacing(10)
-        office_card.body.addWidget(archive_title)
-        office_card.body.addLayout(archive_form)
         office_card.body.addSpacing(10)
         office_card.body.addWidget(alerts_title)
         office_card.body.addLayout(alerts_form)
@@ -199,10 +207,30 @@ class SettingsPage(QWidget):
         currency_card.body.addLayout(rate_row)
         currency_card.body.addLayout(base_row)
 
+        # الطباعة والأرشيف في هذا العمود لا في عمود بيانات المكتب: العمود
+        # الأيسر صار يحمل الهوية والشعار والنسخ والتنبيهات والنموذج، فتجاوز
+        # طولُ الصفحة شاشةَ ١٠٨٠ بكسل وظهر شريط تمرير بلا داع — أسقطه حارس
+        # التمرير. وتوزيعُ الأقسام على العمودين يُعيد الصفحة إلى الشاشة.
+        currency_card.body.addSpacing(10)
+        currency_card.body.addWidget(archive_title)
+        currency_card.body.addLayout(archive_form)
+        currency_card.body.addSpacing(6)
+
         info = QLabel("مجلد بيانات التطبيق: %s" % config.DATA_DIR)
         info.setObjectName("hint")
         info.setWordWrap(True)
         currency_card.body.addWidget(info)
+
+        # هوية المزوّد **معروضة لا قابلة للتحرير**: لا حقل ولا زرّ حفظ، لأنها
+        # ليست إعداداً في قاعدة البيانات أصلاً بل ثابتٌ في الشيفرة.
+        vendor = QLabel(
+            "المنظومة: %s — الإصدار %s\n%s: %s"
+            % (config.APP_TITLE_AR, config.APP_VERSION,
+               config.VENDOR_TAGLINE, config.VENDOR_NAME)
+        )
+        vendor.setObjectName("hint")
+        vendor.setWordWrap(True)
+        currency_card.body.addWidget(vendor)
 
         body.addWidget(currency_card, 1)
         layout.addLayout(body, 1)
