@@ -8,7 +8,7 @@
 import re
 
 from PyQt6.QtCore import QDate, Qt, QTime
-from PyQt6.QtGui import QGuiApplication, QStandardItem, QStandardItemModel
+from PyQt6.QtGui import QColor, QGuiApplication, QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateEdit, QDialog, QDoubleSpinBox, QFormLayout,
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
@@ -29,6 +29,12 @@ LRM = "‎"
 _LTR_RUN_PATTERN = re.compile(
     r"\d+(?:-\d+)+(?:[ T]\d{2}:\d{2}(?::\d{2})?)?"
 )
+
+# ألوان حالة الصفوف في الجداول. فاتحة عمداً: النصّ فوقها داكن (#1f2937) فيبقى
+# مقروءاً، ولونٌ غامق كان يجعل الجدول لوحةً لا يُقرأ منها شيء.
+ROW_DANGER = QColor("#fee2e2")     # محظور — أحمر فاتح
+ROW_ACTIVE = QColor("#dcfce7")     # يستأجر الآن — أخضر فاتح
+ROW_MUTED = QColor("#f1f5f9")      # مُلغى / خارج الخدمة — رمادي
 
 STATUS_BADGE_IDS = {
     "available": "badgeAvailable",
@@ -351,9 +357,23 @@ class DataTable(QTableView):
         self._stretch_column = stretch_column
         self.verticalHeader().setDefaultSectionSize(34)
 
-    def fill(self, rows, formatter=None):
-        """يملأ الجدول. ``formatter`` دالة (صفّ، مفتاح) ← نصّ العرض."""
+    def fill(self, rows, formatter=None, row_color=None):
+        """يملأ الجدول.
+
+        ``formatter`` دالة (صفّ، مفتاح) ← نصّ العرض.
+        ``row_color``  دالة (صفّ) ← ``QColor`` تُلوَّن بها خلفية الصفّ كلّه،
+                       أو ``None`` فيبقى الصفّ بلونه المعتاد.
+
+        التلوين على مستوى الصفّ لا الخليّة: حالةُ العميل (محظور، مستأجر اليوم)
+        صفةٌ للسطر كلّه، وتلوين خليّة واحدة يجعل العين تبحث عن أيّ عمود يحمل
+        الخبر.
+        """
         self.model_.removeRows(0, self.model_.rowCount())
+
+        # التلوين المتناوب يطمس لون الصفّ المقصود: صفٌّ أحمر في موضع زوجي
+        # كان يخرج بلون بين الأحمر والرمادي لا يُميَّز من جاره. فيُطفأ حين
+        # يكون للجدول ألوان حالة، ويبقى حيثما لا ألوان.
+        self.setAlternatingRowColors(row_color is None)
 
         for row in rows:
             items = []
@@ -380,6 +400,12 @@ class DataTable(QTableView):
                 identifier = row.subject_id
             if identifier is not None:
                 items[0].setData(identifier, Qt.ItemDataRole.UserRole)
+
+            color = row_color(row) if row_color is not None else None
+            if color is not None:
+                for item in items:
+                    item.setBackground(color)
+
             self.model_.appendRow(items)
 
         self._fit_columns()
@@ -456,6 +482,32 @@ def date_field(default=None):
     field.setAlignment(Qt.AlignmentFlag.AlignCenter)
     field.setDate(default or QDate.currentDate())
     return field
+
+
+# تاريخ «الفراغ» في حقل اختياري. Qt لا يعرف تاريخاً فارغاً، فيُحجَز أقدم تاريخ
+# ممكن سنتينلاً ويُعرض نصّاً فارغاً عبر ``setSpecialValueText``.
+_EMPTY_DATE = QDate(1900, 1, 1)
+
+
+def optional_date_field(default=None):
+    """حقل تاريخ يجوز أن يبقى **فارغاً**.
+
+    حقل التاريخ العادي يبدأ من تاريخ اليوم، فيُحفظ ما لم يُلمس كأنه قيمة
+    مقصودة: عميلٌ لم يُسأل عن ميلاده يُسجَّل «مولوداً اليوم»، وهو رقم يكذب
+    بصمت في ورقة العقد. فيبدأ هذا الحقل فارغاً حتى يكتب فيه الموظّف شيئاً.
+
+    تُقرأ قيمته بـ ``date_value(field)`` التي تُرجع ``None`` حين يبقى فارغاً.
+    """
+    field = date_field(default or _EMPTY_DATE)
+    field.setMinimumDate(_EMPTY_DATE)
+    field.setSpecialValueText(" ")
+    return field
+
+
+def date_value(field):
+    """نصّ تاريخ الحقل ``YYYY-MM-DD``، أو ``None`` إن تُرك فارغاً."""
+    date = field.date()
+    return None if date <= _EMPTY_DATE else date.toString("yyyy-MM-dd")
 
 
 def time_field(default="12:00"):

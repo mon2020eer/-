@@ -39,13 +39,34 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.user = user
 
-        self.setWindowTitle(config.APP_TITLE_AR)
+        # عنوان النافذة يحمل اسم الشركة كما ضُبط في الإعدادات: الموظّف الذي
+        # يفتح نسختين لمكتبين يعرف أيّهما أمامه من شريط المهام وحده.
+        self.setWindowTitle(self._window_title())
         self.resize(1280, 760)
         self.setMinimumSize(1060, 640)
 
         self._pages = []
         self._build()
         self._start_scheduler()
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _window_title():
+        """«اسم الشركة — عنوان المنظومة»، ويسقط إلى العنوان وحده عند أي خلل.
+
+        العنوان يُبنى قبل أن تُفتح أي شاشة، فلا يجوز أن يمنع خللٌ في قراءة
+        الإعدادات فتحَ النافذة كلّها: قراءة فاشلة تعني عنواناً أقلّ لا تطبيقاً
+        لا يبدأ.
+        """
+        try:
+            from ..services import branding
+
+            name = branding.identity()["name"]
+        except Exception:
+            return config.APP_TITLE_AR
+        if not name or name == config.APP_TITLE_AR:
+            return config.APP_TITLE_AR
+        return "%s — %s" % (name, config.APP_TITLE_AR)
 
     # ------------------------------------------------------------------
     # البناء

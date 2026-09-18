@@ -63,10 +63,15 @@ LOCK_MINUTES = 10
 MIN_PASSWORD_LENGTH = 8
 
 # الافتراضات القابلة للتعديل من شاشة الإعدادات
+# القيم الافتراضية تُزرع بـ ``ON CONFLICT DO NOTHING``: تُكتب مرّةً واحدة على
+# قاعدة جديدة، ولا تمسّ ما ضبطه مكتبٌ قائم مهما تغيّرت هنا.
 DEFAULT_SETTINGS = {
-    "office_name": "مكتب إيجار السيارات",
+    "office_name": "شركة المسار المتحد",
     "office_phone": "",
+    "office_phone_alt": "",
     "office_address": "",
+    "commercial_register": "",
+    "office_logo": "",
     "base_currency": "LYD",
     "backup_enabled": "1",
     "backup_retention": "30",

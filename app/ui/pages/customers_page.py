@@ -10,8 +10,9 @@ from PyQt6.QtWidgets import (
 from ...core import money, session
 from ...repositories import customers_repo, settings_repo
 from ..widgets.common import (
-    Card, DataTable, FormDialog, PageHeader, confirm, date_field,
-    fix_dates, primary_button, search_box, show_error, show_info,
+    ROW_ACTIVE, ROW_DANGER, Card, DataTable, FormDialog, PageHeader, confirm,
+    date_field, date_value, fix_dates, optional_date_field, primary_button,
+    search_box, show_error, show_info,
 )
 
 
@@ -32,21 +33,34 @@ class CustomerDialog(FormDialog):
         self.national_id = QLineEdit()
         self.license_number = QLineEdit()
         self.license_expiry = date_field()
+        self.license_issued_by = QLineEdit()
         self.nationality = QLineEdit()
+        self.date_of_birth = optional_date_field()
         self.address = QLineEdit()
+        self.work_address = QLineEdit()
+        self.phone_alt = QLineEdit()
         self.notes = QPlainTextEdit()
         self.notes.setMaximumHeight(80)
         self.blacklisted = QCheckBox("إدراج العميل في القائمة السوداء (يمنع التعاقد معه)")
+        self.blacklist_reason = QLineEdit()
+        self.blacklist_reason.setPlaceholderText("سبب الحظر — يراه من يفتح ملفّه لاحقاً")
+        self.blacklist_reason.setEnabled(False)
+        self.blacklisted.toggled.connect(self.blacklist_reason.setEnabled)
 
         form.addRow("الاسم الكامل *", self.full_name)
         form.addRow("رقم الهاتف", self.phone)
+        form.addRow("هاتف آخر", self.phone_alt)
         form.addRow("رقم الجواز / الرقم الوطني", self.national_id)
         form.addRow("رقم رخصة القيادة", self.license_number)
         form.addRow("تاريخ انتهاء الرخصة", self.license_expiry)
+        form.addRow("الرخصة صادرة عن", self.license_issued_by)
         form.addRow("الجنسية", self.nationality)
-        form.addRow("العنوان", self.address)
+        form.addRow("تاريخ الميلاد", self.date_of_birth)
+        form.addRow("عنوان السكن", self.address)
+        form.addRow("عنوان العمل", self.work_address)
         form.addRow("ملاحظات", self.notes)
         form.addRow("", self.blacklisted)
+        form.addRow("سبب الحظر", self.blacklist_reason)
 
         hint = QLabel(
             "الاسم وحده إلزامي. ما بقي يمكن إكماله لاحقاً، ويظهر العميل حتى "
@@ -70,10 +84,25 @@ class CustomerDialog(FormDialog):
         self.address.setText(row["address"] or "")
         self.notes.setPlainText(row["notes"] or "")
         self.blacklisted.setChecked(bool(row["is_blacklisted"]))
-        if row["license_expiry"]:
-            from PyQt6.QtCore import QDate
 
+        # أعمدة الترحيل ٤: تُقرأ بلا افتراض وجودها، فقاعدة لم تُرقَّ بعد
+        # (نافذة بين تحديث الملفات وأول تشغيل) لا تُسقط الحوار كلّه.
+        def value(key):
+            return (row[key] if key in row.keys() else None) or ""
+
+        self.license_issued_by.setText(value("license_issued_by"))
+        self.phone_alt.setText(value("phone_alt"))
+        self.work_address.setText(value("work_address"))
+        self.blacklist_reason.setText(value("blacklist_reason"))
+
+        from PyQt6.QtCore import QDate
+
+        if row["license_expiry"]:
             self.license_expiry.setDate(QDate.fromString(row["license_expiry"], "yyyy-MM-dd"))
+        if value("date_of_birth"):
+            self.date_of_birth.setDate(
+                QDate.fromString(value("date_of_birth"), "yyyy-MM-dd")
+            )
 
     def data(self):
         return {
@@ -86,10 +115,19 @@ class CustomerDialog(FormDialog):
             # فيُنبَّه المكتب على وثيقة لم تُسجَّل أصلاً.
             "license_expiry": (self.license_expiry.date().toString("yyyy-MM-dd")
                                if self.license_number.text().strip() else None),
+            "license_issued_by": self.license_issued_by.text().strip() or None,
             "nationality": self.nationality.text().strip() or None,
+            # تاريخ ميلاد لم يُكتب يبقى فارغاً: انظر ``optional_date_field``
+            "date_of_birth": date_value(self.date_of_birth),
             "address": self.address.text().strip() or None,
+            "work_address": self.work_address.text().strip() or None,
+            "phone_alt": self.phone_alt.text().strip() or None,
             "notes": self.notes.toPlainText().strip() or None,
             "is_blacklisted": 1 if self.blacklisted.isChecked() else 0,
+            # سبب الحظر لا يُحفظ لعميل غير محظور: بقاؤه بعد رفع الحظر يجعل
+            # ملفّاً نظيفاً يحمل تهمةً ألغيت.
+            "blacklist_reason": (self.blacklist_reason.text().strip() or None
+                                 if self.blacklisted.isChecked() else None),
         }
 
     def _save(self):
@@ -165,6 +203,16 @@ class CustomersPage(QWidget):
         self.table.selectionModel().selectionChanged.connect(self._on_select)
         self.table.doubleClicked.connect(self._edit)
         table_card.body.addWidget(self.table)
+
+        # مفتاح الألوان: اللون وحده لا يكفي. موظّفٌ جديد لا يعرف ماذا يعني
+        # الأحمر، ومن لا يميّز الألوان لا يرى شيئاً أصلاً — فيُكتب المعنى.
+        legend = QLabel(
+            "🟥 أحمر: عميل محظور لا يجوز التعاقد معه   ·   "
+            "🟩 أخضر: بيده سيارة الآن (عقد مفتوح)"
+        )
+        legend.setObjectName("hint")
+        legend.setWordWrap(True)
+        table_card.body.addWidget(legend)
         content.addWidget(table_card, 3)
 
         # --- لوحة التفاصيل ---
@@ -343,9 +391,22 @@ class CustomersPage(QWidget):
                 order_by="frequent" if self.frequent_toggle.isChecked() else "name",
                 incomplete_only=self.incomplete_toggle.isChecked(),
             )
-            self.table.fill(rows, self._format_customer)
+            self.table.fill(rows, self._format_customer, self._row_color)
         except Exception as error:
             show_error(self, error)
+
+    @staticmethod
+    def _row_color(row):
+        """لون صفّ العميل: أحمر للمحظور، أخضر لمن بيده سيارة الآن.
+
+        **والأحمر يسبق الأخضر.** محظورٌ يستأجر اليوم ليس حالة اطمئنان بل حالة
+        تستدعي انتباهاً فورياً، فلا يجوز أن يُخفي الأخضرُ الحظرَ لأن العميل
+        صادف أن له عقداً مفتوحاً.
+        """
+        if row["is_blacklisted"]:
+            return ROW_DANGER
+        open_contracts = row["open_contracts"] if "open_contracts" in row.keys() else 0
+        return ROW_ACTIVE if open_contracts else None
 
     def _format_customer(self, row, key):
         if key == "last_contract_date":

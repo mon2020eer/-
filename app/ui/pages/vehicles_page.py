@@ -58,6 +58,16 @@ class VehicleDialog(FormDialog):
 
         self.chassis = QLineEdit()
 
+        # «التصميم» في ورقة العقد الرسمية: صالون، ستيشن، دفع رباعي…
+        self.body_style = QLineEdit()
+        self.body_style.setPlaceholderText("صالون · ستيشن · دفع رباعي · بيك أب…")
+
+        # رخصة السيارة نفسها — غير رخصة قيادة العميل، وتُطلب عند المرور
+        self.license_expiry = date_field(QDate.currentDate().addYears(1))
+        self.has_license = QCheckBox("لرخصة السيارة تاريخ انتهاء معروف")
+        self.has_license.toggled.connect(self.license_expiry.setEnabled)
+        self.license_expiry.setEnabled(False)
+
         # التأمين والفحص: تواريخ اختيارية، ومربّع تفعيل لأن كثيراً من السيارات
         # تُسجَّل قبل أن يُعرف تاريخ وثيقتها، وتاريخ مُختلَق أسوأ من لا تاريخ.
         self.insurance_company = QLineEdit()
@@ -86,6 +96,9 @@ class VehicleDialog(FormDialog):
         form.addRow("العملة", self.currency)
         form.addRow("قراءة العدّاد", self.odometer)
         form.addRow("رقم الشاصي", self.chassis)
+        form.addRow("التصميم", self.body_style)
+        form.addRow("", self.has_license)
+        form.addRow("انتهاء رخصة السيارة", self.license_expiry)
         form.addRow("شركة التأمين", self.insurance_company)
         form.addRow("رقم وثيقة التأمين", self.insurance_policy)
         form.addRow("", self.has_insurance)
@@ -123,6 +136,10 @@ class VehicleDialog(FormDialog):
         self.chassis.setText(row["chassis_number"] or "")
         self.notes.setPlainText(row["notes"] or "")
 
+        self.body_style.setText(_optional(row, "body_style"))
+        self._load_expiry(self.has_license, self.license_expiry,
+                          _optional(row, "license_expiry"))
+
         self.insurance_company.setText(_optional(row, "insurance_company"))
         self.insurance_policy.setText(_optional(row, "insurance_policy_no"))
         self._load_expiry(self.has_insurance, self.insurance_expiry,
@@ -147,6 +164,8 @@ class VehicleDialog(FormDialog):
             "currency_code": self.currency.currentData(),
             "odometer": self.odometer.value(),
             "chassis_number": self.chassis.text().strip() or None,
+            "body_style": self.body_style.text().strip() or None,
+            "license_expiry": self._expiry(self.has_license, self.license_expiry),
             "insurance_company": self.insurance_company.text().strip() or None,
             "insurance_policy_no": self.insurance_policy.text().strip() or None,
             "insurance_expiry": self._expiry(self.has_insurance, self.insurance_expiry),

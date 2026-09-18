@@ -10,15 +10,17 @@
 import datetime
 import html
 
-from PyQt6.QtCore import QMarginsF
-from PyQt6.QtGui import QPageLayout, QPageSize, QTextDocument
+from PyQt6.QtCore import QMarginsF, QRectF, QSizeF, Qt
+from PyQt6.QtGui import (
+    QColor, QFont, QPageLayout, QPageSize, QPainter, QTextDocument,
+)
 from PyQt6.QtPrintSupport import QPrinter
 
 from .. import config
 from ..core import audit, money
 from ..core import features
 from ..repositories import contracts_repo, payments_repo, settings_repo
-from . import pdf_template, pricing
+from . import branding, pdf_template, pricing
 
 _STATUS_AR = config.CONTRACT_STATUS_LABELS
 _PAYMENT_AR = config.PAYMENT_STATUS_LABELS
@@ -51,6 +53,7 @@ def _ltr(value):
     return _LRM + _esc(value) + _LRM
 
 
+
 def _amount(minor, symbol):
     return _esc(money.format_amount(minor, symbol))
 
@@ -61,6 +64,30 @@ def _field(row, key, default=None):
     return default if value is None else value
 
 
+def cancellation_stamp(contract):
+    """نصّ ختم الإلغاء، أو ``None`` لعقد غير مُلغى.
+
+    **صياغة واحدة** تُستعمل على الشاشة وعلى الورقة وفي الـ PDF. كانت الصياغة
+    تُكتب في كل موضع على حدة، فاختلف ما يراه الموظّف عمّا يقرؤه الزبون على
+    ورقته — وهما يتحدّثان عن العقد نفسه.
+
+    وتاريخُ إلغاء غائب (عقدٌ أُلغي قبل هذه الترقية) لا يمنع الختم: الحالة
+    «مُلغى» هي الحقيقة، والتاريخ تفصيل يُذكر إن عُرف.
+    """
+    if contract is None or contract["status"] != "cancelled":
+        return None
+
+    date = _field(contract, "cancelled_at") or _field(contract, "closed_at", "")
+    name = _field(contract, "cancelled_by_name")
+
+    text = "تم إلغاء العقد"
+    if date:
+        text += " بتاريخ %s" % str(date)[:10]
+    if name:
+        text += " بواسطة المستخدم %s" % name
+    return text
+
+
 def build_html(contract_id, conn=None):
     """يبني نصّ العقد بصيغة HTML جاهزاً للطباعة أو المعاينة."""
     contract = contracts_repo.get(contract_id, conn=conn)
@@ -69,11 +96,13 @@ def build_html(contract_id, conn=None):
 
     payments = payments_repo.of_contract(contract_id, conn=conn)
     symbol = settings_repo.symbol_of(contract["currency_code"], conn=conn)
-    settings = settings_repo.all_settings(conn=conn)
 
-    office_name = settings.get("office_name") or config.APP_TITLE_AR
-    office_phone = settings.get("office_phone") or ""
-    office_address = settings.get("office_address") or ""
+    # الهوية من مصدرها الوحيد: ما يُضبط في الإعدادات هو ما يُطبع على الورقة
+    identity = branding.identity(conn=conn)
+    logo = branding.logo_data_uri()
+    logo_html = (
+        '<img src="%s" style="height:64px;">' % logo if logo else ""
+    )
 
     payment_rows = "".join(
         """<tr><td>{date}</td><td>{amount}</td><td>{method}</td><td>{note}</td></tr>""".format(
@@ -102,14 +131,21 @@ def build_html(contract_id, conn=None):
     start_time = _field(contract, "start_time", "")
     end_time = _field(contract, "actual_end_time", "")
 
+    stamp = cancellation_stamp(contract)
+    stamp_html = (
+        '<div class="cancelled">%s</div>' % _esc(stamp) if stamp else ""
+    )
+
     return _TEMPLATE.format(
-        office_name=_esc(office_name),
+        cancelled=stamp_html,
+        logo=logo_html,
+        office_name=_esc(identity["name"]),
         duration=_esc(duration),
         rate_label=_esc(rate_label),
         rate_value=rate_value,
         start_time=_date(start_time) if start_time else "—",
         end_time=_date(end_time) if end_time else "—",
-        office_line=_esc(" — ".join(part for part in (office_address, office_phone) if part)),
+        office_line=_esc(branding.contact_line(conn=conn)),
         number=_esc(contract["contract_number"]),
         printed_at=_LRM + datetime.datetime.now().strftime("%Y-%m-%d %H:%M") + _LRM,
         status=_esc(_STATUS_AR.get(contract["status"], contract["status"])),
@@ -177,11 +213,89 @@ def export_pdf(contract_id, output_path=None, force_builtin=False, conn=None):
         )
     )
 
-    document.setPageSize(printer.pageRect(QPrinter.Unit.Point).size())
-    document.print(printer)
+    stamp = cancellation_stamp(contract)
+    if stamp:
+        _print_with_watermark(document, printer, stamp)
+    else:
+        document.setPageSize(printer.pageRect(QPrinter.Unit.Point).size())
+        document.print(printer)
 
     audit.log("export", "contract", contract_id, {"pdf": output_path}, conn=conn)
     return output_path
+
+
+# لون الختم ودرجة شفافيته. شفافٌ بما يُبقي النصّ تحته مقروءاً، وظاهرٌ بما لا
+# يُخطئه من ينظر إلى الورقة — والرقمان قيسا على صفحة مولَّدة لا خُمّنا.
+_WATERMARK_COLOR = QColor(185, 28, 28, 60)
+_WATERMARK_ANGLE = -35
+
+
+def _print_with_watermark(document, printer, text):
+    """يطبع المستند صفحةً صفحة ويرسم ختماً مائلاً فوق **كل** صفحة.
+
+    **لماذا لا ``document.print()``؟** لأنها تفتح الرسّام وتُغلقه بنفسها، فلا
+    يبقى ما يُرسم به فوق ما طُبع. و``QTextDocument`` لا تدعم التدوير أصلاً،
+    فلا سبيل إلى ختم مائل من داخل HTML.
+
+    ورقةُ عقدٍ مُلغى قد تحمل شروطها في صفحة ثانية، وختمٌ على الأولى وحدها
+    يجعل الصفحة الثانية تبدو سارية إن فُصلت — ولذلك يُرسم على كل صفحة.
+    """
+    # **الوحدات هي مربط الفرس.** ``document.print()`` تتكفّل بالتحويل وحدها،
+    # أمّا الرسم اليدوي فيقع في بكسلات الجهاز (١٢٠٠ نقطة/بوصة)، بينما يقيس
+    # المستند صفحته بالنقاط الطباعية (٧٢). فضبطُ صفحة المستند ببكسلات الجهاز
+    # يجعلها في نظره صفحةً هائلة يتّسع فيها المستند كلّه، **فيخرج كل شيء على
+    # ورقة واحدة** — قيس هذا فعلاً بمستند من ١٢٠ فقرة خرج صفحةً واحدة.
+    #
+    # فتُضبط الصفحة بالنقاط كما كانت، ويُقاس الرسّام إليها.
+    page_size = printer.pageRect(QPrinter.Unit.Point).size()
+    document.setPageSize(page_size)
+    scale = printer.resolution() / 72.0
+
+    painter = QPainter(printer)
+    painter.scale(scale, scale)
+    try:
+        for page in range(document.pageCount()):
+            if page:
+                printer.newPage()
+
+            # كل صفحة شريحةٌ من مستند واحد متّصل: يُزاح الرسم إلى أعلاها
+            # ويُقصّ عليها، وإلّا طُبع المستند كلّه فوق كل صفحة.
+            painter.save()
+            painter.translate(0, -page * page_size.height())
+            document.drawContents(
+                painter,
+                QRectF(0, page * page_size.height(),
+                       page_size.width(), page_size.height()),
+            )
+            painter.restore()
+
+            _draw_watermark(painter, page_size, text)
+    finally:
+        painter.end()
+
+
+def _draw_watermark(painter, page_size, text):
+    """يرسم نصّ الختم مائلاً في وسط الصفحة، مقيساً على عرضها لا بحجم ثابت."""
+    painter.save()
+    painter.setPen(_WATERMARK_COLOR)
+
+    font = QFont(painter.font())
+    font.setBold(True)
+    # الحجم يُشتقّ من عرض الصفحة: حجمٌ ثابت بالنقاط يخرج ضئيلاً على دقّة
+    # الطابعة العالية وضخماً على المنخفضة.
+    font.setPixelSize(max(12, int(page_size.width() / 22)))
+    painter.setFont(font)
+
+    painter.translate(page_size.width() / 2, page_size.height() / 2)
+    painter.rotate(_WATERMARK_ANGLE)
+
+    width = page_size.width() * 1.2
+    painter.drawText(
+        QRectF(-width / 2, -page_size.height() / 10, width, page_size.height() / 5),
+        Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+        text,
+    )
+    painter.restore()
 
 
 # نمط الطباعة: أبيض وأسود متزن يوفّر الحبر، وحدود رمادية تُبقي الجداول مقروءة
@@ -203,9 +317,16 @@ _TEMPLATE = """<!DOCTYPE html>
   .sign {{ margin-top: 34px; }}
   .sign td {{ border: none; padding-top: 30px; text-align: center; }}
   .terms {{ font-size: 9pt; color: #333; line-height: 1.7; }}
+  /* ختم الإلغاء: شريط أحمر عريض أعلى الورقة. ورقةٌ مُلغاة قد تكون في يد
+     الزبون بجانب ورقة سارية، فالفرق بينهما يجب أن يُرى من بعيد. */
+  .cancelled {{ border: 3px solid #b91c1c; color: #b91c1c; font-size: 15pt;
+                font-weight: bold; text-align: center; padding: 8px;
+                margin-bottom: 10px; letter-spacing: 1px; }}
 </style></head>
 <body>
+  {cancelled}
   <div class="head">
+    {logo}
     <h1>{office_name}</h1>
     <div class="muted">{office_line}</div>
     <h1 style="font-size:14pt; margin-top:10px;">عقد إيجار سيارة</h1>

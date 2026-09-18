@@ -750,3 +750,70 @@ def test_base_currency_can_still_be_set_before_any_contract(conn, admin):
 
     assert settings_repo.set_base_currency("USD", conn=conn) is True
     assert settings_repo.base_currency(conn=conn)["code"] == "USD"
+
+
+# =============================================================================
+#  بنود الورقة الموقَّعة
+# =============================================================================
+def test_official_contract_terms_are_stored_and_printable(
+        conn, admin, sample_customer, sample_vehicle):
+    """ما يكتبه الموظّف في بنود العقد يصل إلى الورقة المطبوعة.
+
+    الحفظ في قاعدة البيانات وحده لا يكفي: قيمةٌ تُخزَّن ولا تجد طريقها إلى
+    ``values_for_contract`` تبقى خانةً خاليةً في العقد الذي يوقّعه الزبون،
+    والمكتب لا يكتشف ذلك إلّا على أول ورقة حقيقية.
+    """
+    from app.services import pdf_template
+
+    start, end = _dates(4)
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, start, end,
+        terms={
+            "allowed_area": "طرابلس ومصراتة فقط",
+            "guarantees": "شيكان مؤجَّلان + جواز سفر",
+            "departure_condition": "خدش في الرفرف الأيمن",
+        },
+        guarantor={
+            "name": "علي الفيتوري",
+            "phone": "0913334455",
+            "work_address": "سوق الجمعة",
+        },
+        conn=conn,
+    )
+
+    contract = contracts_repo.get(contract_id, conn=conn)
+    assert contract["allowed_area"] == "طرابلس ومصراتة فقط"
+    assert contract["guarantees"] == "شيكان مؤجَّلان + جواز سفر"
+    assert contract["departure_condition"] == "خدش في الرفرف الأيمن"
+    assert contract["guarantor_phone"] == "0913334455"
+    assert contract["guarantor_work_address"] == "سوق الجمعة"
+
+    values = pdf_template.values_for_contract(contract_id, conn=conn)
+    assert values["allowed_area"] == "طرابلس ومصراتة فقط"
+    assert values["guarantees"] == "شيكان مؤجَّلان + جواز سفر"
+    assert values["departure_condition"] == "خدش في الرفرف الأيمن"
+    assert values["guarantor_phone"] == "0913334455"
+    assert values["guarantor_work_address"] == "سوق الجمعة"
+
+
+def test_every_mappable_field_has_a_value(conn, admin, sample_customer, sample_vehicle):
+    """كل حقل يعرضه محرّر المواضع يجد قيمته عند الطباعة.
+
+    المحرّر يبني قائمته من ``FIELDS``، والطباعة تقرأ من ``values_for_contract``.
+    فحقلٌ في الأولى دون الثانية يُعيَّن موضعه على ورقة المكتب ثم يُطبع فارغاً
+    أبداً — عطبٌ صامت لا تكشفه رسالة خطأ.
+    """
+    from app.services import pdf_template
+
+    start, end = _dates(2)
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle, start, end, conn=conn
+    )
+
+    values = pdf_template.values_for_contract(contract_id, conn=conn)
+    missing = [key for key, _, _ in pdf_template.FIELDS if key not in values]
+    assert not missing, "حقول في المحرّر بلا قيمة عند الطباعة: %s" % missing
+
+    sample = pdf_template.sample_values()
+    missing_sample = [key for key, _, _ in pdf_template.FIELDS if key not in sample]
+    assert not missing_sample, "حقول بلا قيمة في تجربة الطباعة: %s" % missing_sample

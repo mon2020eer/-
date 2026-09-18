@@ -21,6 +21,9 @@ _FIELDS = (
     "insurance_expiry",
     "inspection_expiry",
     "notes",
+    # حقول ورقة العقد الرسمية (الترحيل ٤)
+    "body_style",
+    "license_expiry",
 )
 
 

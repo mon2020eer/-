@@ -58,7 +58,8 @@ def _wrap_overlap_error(error):
 def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
                   discount=0, extra_charges=0, deposit_amount=0,
                   deposit_method="cash", pickup_location=None, notes=None,
-                  start_odometer=None, start_time=None, guarantor=None, conn=None):
+                  start_odometer=None, start_time=None, guarantor=None,
+                  terms=None, conn=None):
     """يفتح عقد إيجار جديداً ويُرجع ``(معرّف العقد، رقم العقد)``.
 
     يحسب القيمة تلقائياً من تعرفة السيارة ومدّة الإيجار، ويحفظ لقطة من السعر
@@ -66,6 +67,11 @@ def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
 
     العقد الذي يبدأ في تاريخ قادم **حجز**: يُقبل ولو كانت السيارة مؤجَّرة اليوم،
     وتبقى حالتها «مؤجَّرة» حتى ينتهي العقد الجاري ثم يبدأ الحجز في موعده.
+
+    ``terms`` بنود الورقة الموقَّعة التي لا تدخل في الحساب: مكان التجوّل المسموح
+    به، والضمانات المحجوزة، وحالة السيارة ساعةَ خرجت. كلّها اختيارية، لكنها
+    **الحجّة عند الخلاف**، فتُحفظ في العقد لا في ملفّ العميل: تختلف من عقد إلى
+    عقد للعميل الواحد.
     """
     user = session.require_login()
     features.require("contracts")
@@ -113,7 +119,14 @@ def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
     guarantor = {key: (str(value).strip() or None)
                  for key, value in (guarantor or {}).items() if value}
     guarantor = {key: guarantor.get(key)
-                 for key in ("name", "nationality", "passport", "address")}
+                 for key in ("name", "nationality", "passport", "address",
+                             "phone", "work_address")}
+
+    # بنود الورقة: نصوص حرّة تُحفظ كما كتبها الموظّف، والفارغ منها يبقى فارغاً
+    terms = {key: (str(value).strip() or None)
+             for key, value in (terms or {}).items() if value}
+    terms = {key: terms.get(key)
+             for key in ("allowed_area", "guarantees", "departure_condition")}
 
     hourly_rate = int(vehicle["hourly_rate"] or 0) or pricing.default_hourly_rate(
         vehicle["daily_rate"]
@@ -132,9 +145,11 @@ def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
                         days_count, subtotal, discount, extra_charges, total_amount,
                         start_odometer, pickup_location, notes,
                         guarantor_name, guarantor_nationality,
-                        guarantor_passport, guarantor_address, created_by)
+                        guarantor_passport, guarantor_address,
+                        guarantor_phone, guarantor_work_address,
+                        allowed_area, guarantees, departure_condition, created_by)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                           ?, ?, ?, ?, ?)""",
+                           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     contract_number, customer_id, vehicle_id,
                     start_iso, end_iso, start_time,
@@ -146,6 +161,9 @@ def open_contract(customer_id, vehicle_id, start_date, expected_end_date,
                     pickup_location, notes,
                     guarantor.get("name"), guarantor.get("nationality"),
                     guarantor.get("passport"), guarantor.get("address"),
+                    guarantor.get("phone"), guarantor.get("work_address"),
+                    terms.get("allowed_area"), terms.get("guarantees"),
+                    terms.get("departure_condition"),
                     user.id,
                 ),
             )
@@ -409,7 +427,14 @@ def cancel_contract(contract_id, reason=None, conn=None):
 
     الإلغاء لا يمحو العقد ولا دفعاته، بل ينقله إلى حالة «مُلغى» ويحرّر السيارة،
     فيبقى أثر العملية كاملاً في السجلّات.
+
+    ويُحفظ **تاريخ الإلغاء واسم من ألغاه** في العقد نفسه لا في سجلّ التدقيق
+    وحده: نسخةٌ من عقد مُلغى قد تكون في يد الزبون، فلا بدّ أن تحمل الورقة
+    المطبوعة ختمها. و``closed_by`` معرّفٌ رقمي، والاسم يُنسخ نصّاً لأن
+    المستخدم قد يُحذف أو يتغيّر اسمه بعد سنة، والورقة لا تُعاد كتابتها.
     """
+    user = session.require_login()
+
     contract = contracts_repo.get_raw(contract_id, conn=conn)
     if contract is None:
         raise RentalError("العقد غير موجود.")
@@ -421,10 +446,12 @@ def cancel_contract(contract_id, reason=None, conn=None):
             """UPDATE contracts
                   SET status = 'cancelled', closed_by = ?,
                       closed_at = datetime('now', 'localtime'),
+                      cancelled_at = date('now', 'localtime'),
+                      cancelled_by_name = ?,
                       notes = CASE WHEN ? IS NULL THEN notes
                                    ELSE COALESCE(notes || char(10), '') || 'سبب الإلغاء: ' || ? END
                 WHERE id = ?""",
-            (session.current_user_id(), reason, reason, contract_id),
+            (session.current_user_id(), user.full_name, reason, reason, contract_id),
         )
         # لا تُفرض «متاحة» فرضاً: السيارة قد تحمل عقداً جارياً آخر — إلغاء حجز
         # قادم لا يجوز أن يُحرّر سيارةً في يد عميل اليوم.

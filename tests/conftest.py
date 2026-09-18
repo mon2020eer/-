@@ -99,6 +99,22 @@ def sample_vehicle(admin, conn):
     )
 
 
+@pytest.fixture()
+def sample_contract(admin, conn, sample_customer, sample_vehicle):
+    """عقد مفتوح جاهز للطباعة والإلغاء — تُستعمله اختبارات الورق."""
+    import datetime
+
+    from app.services import rental_service
+
+    today = datetime.date.today()
+    contract_id, _ = rental_service.open_contract(
+        sample_customer, sample_vehicle,
+        today.isoformat(), (today + datetime.timedelta(days=3)).isoformat(),
+        conn=conn,
+    )
+    return contract_id
+
+
 @pytest.fixture(autouse=True)
 def _default_tier():
     """يبدأ كل اختبار من النسخة المتقدّمة.

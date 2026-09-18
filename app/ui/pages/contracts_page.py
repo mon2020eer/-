@@ -18,11 +18,11 @@ from ...core import money, session
 from ...repositories import (
     contracts_repo, customers_repo, payments_repo, settings_repo, vehicles_repo,
 )
-from ...services import alerts, contract_pdf, pricing, rental_service
+from ...services import alerts, contract_pdf, pricing, printing, rental_service
 from ..widgets.common import (
-    Card, DataTable, FormDialog, PageHeader, combo, confirm, date_field,
-    fix_dates, money_field, primary_button, search_box, show_error, show_info,
-    time_field,
+    ROW_DANGER, ROW_MUTED, Card, DataTable, FormDialog, PageHeader, combo,
+    confirm, date_field, fix_dates, money_field, primary_button, search_box,
+    show_error, show_info, time_field,
 )
 
 
@@ -111,12 +111,26 @@ class NewContractDialog(FormDialog):
 
         self.pickup = QLineEdit()
 
+        # بنود الورقة الموقَّعة: لا تدخل في الحساب، لكنها ما يُحتكم إليه عند
+        # الخلاف — فحقلٌ ناقص هنا فراغٌ يُملأ بالقلم أو يبقى خالياً.
+        self.allowed_area = QLineEdit()
+        self.allowed_area.setPlaceholderText("المدن أو المناطق المسموح التجوّل فيها")
+        self.guarantees = QLineEdit()
+        self.guarantees.setPlaceholderText("مثال: شيكان مؤجَّلان + جواز سفر")
+        self.departure_condition = QPlainTextEdit()
+        self.departure_condition.setMaximumHeight(60)
+        self.departure_condition.setPlaceholderText(
+            "حالة السيارة ساعةَ خرجت: الخدوش، الإطارات، مستوى الوقود…"
+        )
+
         # الكفيل: تطلبه نماذج عقود المكاتب المطبوعة، ويتغيّر بين عقد وآخر
         # للعميل نفسه، فيُحفظ في العقد لا في ملفّ العميل.
         self.guarantor_name = QLineEdit()
         self.guarantor_nationality = QLineEdit()
         self.guarantor_passport = QLineEdit()
         self.guarantor_address = QLineEdit()
+        self.guarantor_phone = QLineEdit()
+        self.guarantor_work_address = QLineEdit()
 
         self.notes = QPlainTextEdit()
         self.notes.setMaximumHeight(70)
@@ -132,10 +146,15 @@ class NewContractDialog(FormDialog):
         form.addRow("طريقة دفع العربون", self.deposit_method)
         form.addRow("قراءة العدّاد عند الاستلام", self.odometer)
         form.addRow("مكان الاستلام", self.pickup)
+        form.addRow("مكان التجوّل المسموح", self.allowed_area)
+        form.addRow("الضمانات المحجوزة", self.guarantees)
+        form.addRow("حالة السيارة عند المغادرة", self.departure_condition)
         form.addRow("اسم الكفيل", self.guarantor_name)
         form.addRow("جنسية الكفيل", self.guarantor_nationality)
         form.addRow("رقم جواز الكفيل", self.guarantor_passport)
         form.addRow("عنوان الكفيل", self.guarantor_address)
+        form.addRow("هاتف الكفيل", self.guarantor_phone)
+        form.addRow("عنوان عمل الكفيل", self.guarantor_work_address)
         form.addRow("ملاحظات", self.notes)
 
         # --- التسعيرة اللحظية ---
@@ -326,6 +345,14 @@ class NewContractDialog(FormDialog):
                     "nationality": self.guarantor_nationality.text().strip(),
                     "passport": self.guarantor_passport.text().strip(),
                     "address": self.guarantor_address.text().strip(),
+                    "phone": self.guarantor_phone.text().strip(),
+                    "work_address": self.guarantor_work_address.text().strip(),
+                },
+                terms={
+                    "allowed_area": self.allowed_area.text().strip(),
+                    "guarantees": self.guarantees.text().strip(),
+                    "departure_condition":
+                        self.departure_condition.toPlainText().strip(),
                 },
             )
         except Exception as error:
@@ -704,6 +731,16 @@ class ContractsPage(QWidget):
         content.addWidget(table_card, 7)
 
         detail_card = Card()
+        # شريط الإلغاء: يعلو التفاصيل كلّها لأنه يغيّر معناها. عقدٌ مُلغى
+        # إجمالُه وتواريخه ما زالت معروضة، فبلا هذا الشريط تُقرأ كأنها سارية.
+        self.cancelled_banner = QLabel("")
+        self.cancelled_banner.setWordWrap(True)
+        self.cancelled_banner.setStyleSheet(
+            "background: #fee2e2; color: #b91c1c; border: 1px solid #b91c1c;"
+            " border-radius: 8px; padding: 8px; font-weight: bold;"
+        )
+        self.cancelled_banner.setVisible(False)
+
         self.detail_title = QLabel("اختر عقداً لعرض تفاصيله")
         self.detail_title.setObjectName("sectionTitle")
         self.detail_body = QLabel("")
@@ -749,6 +786,7 @@ class ContractsPage(QWidget):
         actions.addLayout(row1)
         actions.addLayout(row2)
 
+        detail_card.body.addWidget(self.cancelled_banner)
         detail_card.body.addWidget(self.detail_title)
         detail_card.body.addWidget(self.detail_body)
         detail_card.body.addLayout(actions)
@@ -826,9 +864,24 @@ class ContractsPage(QWidget):
             return money.format_amount(row["amount"], symbol)
         return self._format(row, key)
 
+    @staticmethod
+    def _row_color(row):
+        """لون صفّ العقد: أحمر للمُلغى، رمادي للمُغلق، ولا لون للجاري.
+
+        الجاري يبقى بلا لون عمداً: هو الحال الطبيعي، وتلوين كل شيء يُلغي معنى
+        التلوين — ما يُميَّز باللون هو ما خرج عن المسار.
+        """
+        status = row["status"] if "status" in row.keys() else ""
+        if status == "cancelled":
+            return ROW_DANGER
+        if status == "closed":
+            return ROW_MUTED
+        return None
+
     def _on_select(self):
         contract = self._selected()
         if contract is None:
+            self.cancelled_banner.setVisible(False)
             self.detail_title.setText("اختر عقداً لعرض تفاصيله")
             self.detail_body.setText("")
             self.payments_table.fill([])
@@ -852,6 +905,12 @@ class ContractsPage(QWidget):
             )
         else:
             duration = "%d يوم" % contract["days_count"]
+
+        # ختم الإلغاء على الشاشة بالصياغة نفسها التي تُطبع على الورقة، فلا
+        # يقرأ الموظّف شيئاً ويقرأ الزبون على ورقته شيئاً آخر عن العقد نفسه.
+        stamp = contract_pdf.cancellation_stamp(contract)
+        self.cancelled_banner.setText(fix_dates(stamp) if stamp else "")
+        self.cancelled_banner.setVisible(bool(stamp))
 
         self.detail_title.setText("العقد %s" % contract["contract_number"])
         self.detail_body.setText(fix_dates(
@@ -973,15 +1032,49 @@ class ContractsPage(QWidget):
         self.refresh()
 
     def _print(self, contract_id=None):
+        """ضغطة واحدة: يُؤرشَف العقد ثم يخرج من الطابعة الافتراضية بلا حوار.
+
+        الترتيب مقصود — **الأرشفة أولاً**. عقدٌ طُبع ولم يُحفظ لا أثر له في
+        المنظومة إن ضاعت ورقته، أمّا عقدٌ حُفظ ولم يُطبع فيُطبع ثانيةً متى شئت.
+        """
         contract_id = contract_id or self.table.selected_id()
         if not contract_id:
             return
+
+        contract = contracts_repo.get(contract_id)
+        if contract is None:
+            return
+
         try:
-            path = contract_pdf.export_pdf(contract_id)
+            target = printing.archive_path(
+                "%s.pdf" % contract["contract_number"], conn=None
+            )
+            path = contract_pdf.export_pdf(contract_id, target)
         except Exception as error:
             show_error(self, "تعذّر توليد ملف العقد: %s" % error)
             return
-        show_info(self, "حُفظ العقد بصيغة PDF في:\n%s" % path)
+
+        try:
+            printer = printing.print_pdf(path)
+        except Exception as error:
+            # الورقة لم تخرج، لكن العقد محفوظ — والرسالة تقول الأمرين معاً
+            # فلا يظنّ الموظّف أن شيئاً لم يحدث فيعيد الكرّة.
+            show_error(
+                self,
+                "حُفظ العقد في:\n%s\n\nولم تتمّ الطباعة: %s" % (path, error),
+            )
+            return
+
+        if printer:
+            show_info(self, "طُبع العقد على «%s»،\nوحُفظت نسخة في:\n%s"
+                            % (printer, path))
+        else:
+            show_info(
+                self,
+                "حُفظت نسخة العقد في:\n%s\n\n"
+                "لم يُعثر على طابعة مثبَّتة على هذا الجهاز، فاطبع الملف من مكانه."
+                % path,
+            )
 
     def _cancel(self):
         contract = self._selected()
@@ -1010,7 +1103,7 @@ class ContractsPage(QWidget):
                 status=self.status_filter.currentData() or None,
                 payment_status=self.payment_filter.currentData() or None,
             )
-            self.table.fill(rows, self._format)
+            self.table.fill(rows, self._format, self._row_color)
             self._on_select()
         except Exception as error:
             show_error(self, error)

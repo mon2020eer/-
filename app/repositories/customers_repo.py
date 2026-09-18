@@ -19,6 +19,12 @@ _FIELDS = (
     "address",
     "notes",
     "is_blacklisted",
+    # حقول ترويسة العقد الرسمي (الترحيل ٤)
+    "date_of_birth",
+    "license_issued_by",
+    "phone_alt",
+    "work_address",
+    "blacklist_reason",
 )
 
 
@@ -66,6 +72,11 @@ def search(term=None, limit=500, order_by="name", incomplete_only=False, conn=No
         SELECT c.*,
                COUNT(ct.id)                                   AS contracts_count,
                MAX(ct.start_date)                             AS last_contract_date,
+               -- عقدٌ مفتوح يعني سيارةً في يد هذا العميل الآن. يُحسب في
+               -- الاستعلام لا بعده: حسابه صفّاً صفّاً في الواجهة كان يعني
+               -- استعلاماً لكل عميل عند كل فتح لشاشة العملاء.
+               SUM(CASE WHEN ct.status = 'open' THEN 1 ELSE 0 END)
+                                                              AS open_contracts,
                COALESCE(SUM(CASE WHEN ct.status != 'cancelled'
                                  THEN ct.total_amount * ct.rate_to_base / 1000000
                                  ELSE 0 END), 0)              AS total_spent

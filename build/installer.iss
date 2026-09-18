@@ -12,14 +12,29 @@
 
 #define AppName "منظومة إدارة مكتب إيجار السيارات"
 #define AppNameEn "CarRentalOffice"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define AppExe "CarRentalOffice.exe"
+#define AppPublisher "شركة المسار المتحد"
 
 [Setup]
+; ============================ الترقية فوق القديم ============================
+;  AppId **لا يُغيَّر أبداً**. هو ما يعرف به ويندوز أن هذا التثبيت هو نفسه
+;  التثبيت السابق، فيُرقّيه في مكانه بدل أن يضع نسخةً ثانية بجانبه. وتغييرُه
+;  يعني عميلاً بنسختين على قائمة البرامج، يفتح إحداهما فلا يجد بياناته.
+;
+;  وبيانات المكتب أصلاً خارج مجلد البرنامج (%APPDATA%\CarRentalOffice)، وتُرقّى
+;  قاعدتها تلقائياً عند أوّل تشغيل بعد نسخةٍ احتياطية تسبق الترقية.
+;  التفاصيل في docs\UPGRADE.md
+; ===========================================================================
 AppId={{8B3F1C24-7E4A-4D96-9C41-2A6F0B5D7E13}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
+AppPublisher={#AppPublisher}
+VersionInfoCompany={#AppPublisher}
+VersionInfoProductName={#AppName}
+VersionInfoVersion={#AppVersion}
+VersionInfoDescription={#AppName}
 DefaultDirName={autopf}\{#AppNameEn}
 DefaultGroupName={#AppName}
 OutputDir=installer
@@ -50,6 +65,7 @@ Source: "..\docs\*"; DestDir: "{app}\docs"; Flags: ignoreversion recursesubdirs 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{group}\دليل المستخدم"; Filename: "{app}\docs\USER_GUIDE.md"
+Name: "{group}\دليل الترقية"; Filename: "{app}\docs\UPGRADE.md"
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 

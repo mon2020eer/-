@@ -55,10 +55,15 @@ CREATE TABLE IF NOT EXISTS customers (
     national_id    TEXT    UNIQUE,                    -- رقم الجواز أو الرقم الوطني
     license_number TEXT,
     license_expiry TEXT,                              -- YYYY-MM-DD
+    license_issued_by TEXT,                           -- «صادرة عن» في ورقة العقد
     nationality    TEXT,
-    address        TEXT,
+    date_of_birth  TEXT,                              -- YYYY-MM-DD
+    address        TEXT,                              -- عنوان السكن
+    work_address   TEXT,                              -- عنوان العمل
+    phone_alt      TEXT,                              -- هاتف آخر
     notes          TEXT,
     is_blacklisted INTEGER NOT NULL DEFAULT 0 CHECK (is_blacklisted IN (0, 1)),
+    blacklist_reason TEXT,                            -- سبب الحظر، يراه من يفتح الملفّ
     created_at     TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at     TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -93,6 +98,8 @@ CREATE TABLE IF NOT EXISTS vehicles (
                           CHECK (status IN ('available', 'rented', 'maintenance')),
     odometer      INTEGER NOT NULL DEFAULT 0 CHECK (odometer >= 0),
     chassis_number TEXT,
+    body_style     TEXT,                              -- «التصميم»: صالون، ستيشن…
+    license_expiry TEXT,                              -- رخصة السيارة، YYYY-MM-DD
     insurance_company   TEXT,
     insurance_policy_no TEXT,
     insurance_expiry    TEXT,                         -- YYYY-MM-DD
@@ -152,6 +159,19 @@ CREATE TABLE IF NOT EXISTS contracts (
     guarantor_nationality TEXT,
     guarantor_passport    TEXT,
     guarantor_address     TEXT,
+    guarantor_phone       TEXT,
+    guarantor_work_address TEXT,
+
+    -- بنود الورقة الموقَّعة: لا تدخل في أي حساب، لكنها ما يُحتكم إليه عند
+    -- الخلاف. تُحفظ في العقد لأنها تتغيّر بين عقد وآخر للعميل الواحد.
+    allowed_area        TEXT,                         -- مكان التجوّل المسموح
+    guarantees          TEXT,                         -- الضمانات المحجوزة
+    departure_condition TEXT,                         -- حالة السيارة عند المغادرة
+    renewed_until       TEXT,                         -- «تم تجديد العقد إلى يوم»
+
+    -- أثر الإلغاء: يُكتب على الورقة لا في السجلّ وحده
+    cancelled_at        TEXT,
+    cancelled_by_name   TEXT,
 
     created_by          INTEGER NOT NULL REFERENCES users (id),
     closed_by           INTEGER REFERENCES users (id),
@@ -313,13 +333,19 @@ SELECT
     cu.nationality                                 AS customer_nationality,
     cu.license_number                              AS customer_license_number,
     cu.license_expiry                              AS customer_license_expiry,
+    cu.license_issued_by                           AS customer_license_issuer,
     cu.address                                     AS customer_address,
+    cu.work_address                                AS customer_work_address,
+    cu.phone_alt                                   AS customer_phone_alt,
+    cu.date_of_birth                               AS customer_dob,
     v.plate_number                                 AS plate_number,
     v.brand                                        AS brand,
     v.model                                        AS model,
     v.year                                         AS year,
     v.color                                        AS color,
     v.chassis_number                               AS chassis_number,
+    v.body_style                                   AS body_style,
+    v.license_expiry                               AS vehicle_license_expiry,
     v.brand || ' ' || v.model                      AS vehicle_title,
     b.paid_amount                                  AS paid_amount,
     b.balance_due                                  AS balance_due,

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """صفحة الإعدادات: بيانات المكتب، والعملات وأسعار الصرف، وخيارات النسخ."""
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSpinBox, QVBoxLayout, QWidget,
@@ -9,7 +11,7 @@ from PyQt6.QtWidgets import (
 from ... import config
 from ...core import features, money
 from ...repositories import settings_repo
-from ...services import pdf_template
+from ...services import branding, pdf_template, printing
 from ..widgets.common import (
     Card, DataTable, PageHeader, scrollable_body, combo, confirm, money_field, primary_button,
     show_error, show_info,
@@ -34,24 +36,29 @@ class SettingsPage(QWidget):
 
         # --- بيانات المكتب ---
         office_card = Card()
-        office_title = QLabel("بيانات المكتب (تظهر في ترويسة العقد المطبوع)")
+        office_title = QLabel("هوية الشركة (تظهر في ترويسة كل ما يُطبع)")
         office_title.setObjectName("sectionTitle")
 
         office_form = QFormLayout()
         office_form.setSpacing(10)
 
         # حدّ أدنى للعرض: هذه الحقول في عمود يقاسم عمودَ العملات عرض الصفحة،
-        # فكانت تخرج ضيّقة لا تُبين ما يُكتب فيها — واسم المكتب يُطبع في
+        # فكانت تخرج ضيّقة لا تُبين ما يُكتب فيها — واسم الشركة يُطبع في
         # ترويسة كل عقد، فمن حقّ صاحبه أن يراه كاملاً وهو يكتبه.
         self.office_name = QLineEdit()
         self.office_phone = QLineEdit()
+        self.office_phone_alt = QLineEdit()
         self.office_address = QLineEdit()
-        for field in (self.office_name, self.office_phone, self.office_address):
+        self.commercial_register = QLineEdit()
+        for field in (self.office_name, self.office_phone, self.office_phone_alt,
+                      self.office_address, self.commercial_register):
             field.setMinimumWidth(260)
 
-        office_form.addRow("اسم المكتب", self.office_name)
+        office_form.addRow("اسم الشركة", self.office_name)
         office_form.addRow("رقم الهاتف", self.office_phone)
+        office_form.addRow("هاتف آخر", self.office_phone_alt)
         office_form.addRow("العنوان", self.office_address)
+        office_form.addRow("السجلّ التجاري", self.commercial_register)
 
         backup_title = QLabel("النسخ الاحتياطي")
         backup_title.setObjectName("sectionTitle")
@@ -69,6 +76,39 @@ class SettingsPage(QWidget):
         backup_form.addRow("", self.backup_enabled)
         backup_form.addRow("", self.auto_daily)
         backup_form.addRow("عدد النسخ المحفوظة في Drive", self.retention)
+
+        archive_title = QLabel("الطباعة والأرشيف")
+        archive_title.setObjectName("sectionTitle")
+
+        archive_form = QFormLayout()
+        archive_form.setSpacing(10)
+
+        self.archive_dir = QLineEdit()
+        self.archive_dir.setMinimumWidth(260)
+        self.archive_dir.setReadOnly(True)   # يُختار بمتصفّح الملفات لا يُكتب
+        self.archive_dir.setToolTip(
+            "كل عقد يُطبع تُحفظ نسخته PDF هنا، منظَّمةً بالسنة ثم الشهر."
+        )
+
+        pick_archive = QPushButton("اختيار المجلد…")
+        pick_archive.clicked.connect(self._pick_archive_dir)
+
+        reset_archive = QPushButton("العودة للمجلد الافتراضي")
+        reset_archive.clicked.connect(self._reset_archive_dir)
+
+        archive_buttons = QHBoxLayout()
+        archive_buttons.setSpacing(8)
+        archive_buttons.addWidget(pick_archive)
+        archive_buttons.addWidget(reset_archive)
+        archive_buttons.addStretch(1)
+
+        archive_form.addRow("مجلد حفظ المطبوعات", self.archive_dir)
+        archive_form.addRow("", archive_buttons)
+
+        self.printer_label = QLabel("")
+        self.printer_label.setObjectName("hint")
+        self.printer_label.setWordWrap(True)
+        archive_form.addRow("", self.printer_label)
 
         alerts_title = QLabel("التنبيهات")
         alerts_title.setObjectName("sectionTitle")
@@ -88,9 +128,13 @@ class SettingsPage(QWidget):
 
         office_card.body.addWidget(office_title)
         office_card.body.addLayout(office_form)
+        office_card.body.addWidget(self._logo_box())
         office_card.body.addSpacing(10)
         office_card.body.addWidget(backup_title)
         office_card.body.addLayout(backup_form)
+        office_card.body.addSpacing(10)
+        office_card.body.addWidget(archive_title)
+        office_card.body.addLayout(archive_form)
         office_card.body.addSpacing(10)
         office_card.body.addWidget(alerts_title)
         office_card.body.addLayout(alerts_form)
@@ -172,6 +216,124 @@ class SettingsPage(QWidget):
         if key == "updated_at":
             return str(row["updated_at"])[:16]
         return row[key] if key in row.keys() else ""
+
+    # ------------------------------------------------------------------
+    # الطباعة والأرشيف
+    # ------------------------------------------------------------------
+    def _pick_archive_dir(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, "اختر مجلد حفظ العقود المطبوعة", self.archive_dir.text()
+        )
+        if not directory:
+            return
+        try:
+            printing.set_archive_root(directory)
+        except Exception as error:
+            show_error(self, error)
+            return
+        self._refresh_archive()
+        show_info(self, "ستُحفظ نسخ العقود المطبوعة في:\n%s" % directory)
+
+    def _reset_archive_dir(self):
+        try:
+            printing.set_archive_root("")
+        except Exception as error:
+            show_error(self, error)
+            return
+        self._refresh_archive()
+
+    def _refresh_archive(self):
+        self.archive_dir.setText(str(printing.archive_root()))
+
+        # اسم الطابعة يُعرض هنا لا يُكتشف عند أول عقد: جهازٌ بلا طابعة يُعرف
+        # قبل أن يقف زبون ينتظر ورقته.
+        try:
+            printer = printing.default_printer_name()
+        except Exception:
+            printer = None
+
+        self.printer_label.setText(
+            "الطباعة تخرج مباشرةً على: %s" % printer if printer else
+            "لا توجد طابعة مثبَّتة على هذا الجهاز — تُحفظ نسخة PDF فقط."
+        )
+
+    # ------------------------------------------------------------------
+    # شعار الشركة
+    # ------------------------------------------------------------------
+    def _logo_box(self):
+        """رفع شعار الشركة ومعاينته.
+
+        المعاينة ليست زينة: صورةٌ مقلوبة أو بخلفية سوداء تخرج على كل عقد
+        يُطبع، ورؤيتها هنا أرخص من اكتشافها على ورقة أمام زبون.
+        """
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(8)
+
+        self.logo_preview = QLabel("")
+        self.logo_preview.setMinimumHeight(64)
+        self.logo_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.logo_preview)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+
+        upload = QPushButton("رفع شعار الشركة")
+        upload.clicked.connect(self._upload_logo)
+        buttons.addWidget(upload)
+
+        self.drop_logo = QPushButton("حذف الشعار")
+        self.drop_logo.clicked.connect(self._remove_logo)
+        buttons.addWidget(self.drop_logo)
+
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        return box
+
+    def _refresh_logo(self):
+        path = branding.logo_path()
+        self.drop_logo.setEnabled(path is not None)
+
+        if path is None:
+            self.logo_preview.setPixmap(QPixmap())
+            self.logo_preview.setText(
+                "لا شعار — تُطبع الترويسة باسم الشركة وحده."
+            )
+            return
+
+        pixmap = QPixmap(str(path))
+        self.logo_preview.setText("")
+        self.logo_preview.setPixmap(
+            pixmap.scaledToHeight(64, Qt.TransformationMode.SmoothTransformation)
+        )
+
+    def _upload_logo(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "اختر صورة شعار الشركة", "",
+            "الصور (*.png *.jpg *.jpeg *.bmp *.webp)",
+        )
+        if not path:
+            return
+        try:
+            branding.install_logo(path)
+        except Exception as error:
+            show_error(self, error)
+            return
+        self._refresh_logo()
+        show_info(self, "رُفع الشعار، وسيظهر في ترويسة كل عقد يُطبع.")
+
+    def _remove_logo(self):
+        if not branding.has_logo():
+            return
+        if not confirm(self, "سيُحذف شعار الشركة وتعود الترويسة إلى الاسم وحده. متابعة؟"):
+            return
+        try:
+            branding.remove_logo()
+        except Exception as error:
+            show_error(self, error)
+            return
+        self._refresh_logo()
 
     # ------------------------------------------------------------------
     # نموذج عقد المكتب
@@ -287,7 +449,9 @@ class SettingsPage(QWidget):
             settings_repo.set_many({
                 "office_name": self.office_name.text().strip(),
                 "office_phone": self.office_phone.text().strip(),
+                "office_phone_alt": self.office_phone_alt.text().strip(),
                 "office_address": self.office_address.text().strip(),
+                "commercial_register": self.commercial_register.text().strip(),
                 "backup_enabled": "1" if self.backup_enabled.isChecked() else "0",
                 "auto_backup_daily": "1" if self.auto_daily.isChecked() else "0",
                 "backup_retention": str(self.retention.value()),
@@ -327,12 +491,16 @@ class SettingsPage(QWidget):
             values = settings_repo.all_settings()
             self.office_name.setText(values.get("office_name", ""))
             self.office_phone.setText(values.get("office_phone", ""))
+            self.office_phone_alt.setText(values.get("office_phone_alt", ""))
             self.office_address.setText(values.get("office_address", ""))
+            self.commercial_register.setText(values.get("commercial_register", ""))
+            self._refresh_logo()
             self.backup_enabled.setChecked(values.get("backup_enabled", "1") == "1")
             self.auto_daily.setChecked(values.get("auto_backup_daily", "1") == "1")
             self.retention.setValue(int(values.get("backup_retention") or 30))
             self.alert_days.setValue(int(values.get("alert_days_before") or 30))
             self._refresh_template_card()
+            self._refresh_archive()
 
             currencies = settings_repo.list_currencies()
             self.currency_table.fill(currencies, self._format_currency)

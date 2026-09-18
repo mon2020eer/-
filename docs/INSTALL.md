@@ -395,6 +395,7 @@ powershell -ExecutionPolicy Bypass -File build\build_exe.ps1
 | الدليل | متى تحتاجه |
 |---|---|
 | [`USER_GUIDE.md`](USER_GUIDE.md) | العمل اليومي: العقود والتجديد والتقارير ونموذج عقد مكتبك |
+| [`UPGRADE.md`](UPGRADE.md) | **للمزوّد**: ترقية جهاز عميل يعمل على نسخة أقدم دون فقد بياناته |
 | [`GOOGLE_DRIVE_SETUP.md`](GOOGLE_DRIVE_SETUP.md) | ربط النسخ الاحتياطي السحابي |
 | [`LICENSING.md`](LICENSING.md) | **للمزوّد**: إصدار المفاتيح ومتابعة التجديدات |
 | [`PRICING.md`](PRICING.md) | **للمزوّد**: النسختان والأسعار ومنطقها |

@@ -10,6 +10,7 @@
 """
 
 import datetime
+import pathlib
 import sqlite3
 
 import pytest
@@ -402,3 +403,185 @@ def test_foreign_keys_are_restored_after_the_rebuild(app_home):
 
     assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     connection.close()
+
+
+# =============================================================================
+#  الترقية ٤ — حقول العقد الرسمي
+#
+#  هذه هي الترقية التي ستُشغَّل على جهاز عميل يعمل بالنسخة السابقة فعلاً،
+#  وفيه بياناته التي كتبها بيده. فالمطلوب برهانٌ لا وعد: **كل قيمة قديمة تبقى
+#  كما هي حرفاً بحرف، والأعمدة الجديدة تُولد فارغة لا مملوءة بقيم مُختلَقة.**
+# =============================================================================
+_MIGRATION_4_COLUMNS = {
+    "customers": ("date_of_birth", "license_issued_by", "phone_alt",
+                  "work_address", "blacklist_reason"),
+    "vehicles": ("body_style", "license_expiry"),
+    "contracts": ("allowed_area", "guarantees", "departure_condition",
+                  "renewed_until", "guarantor_phone", "guarantor_work_address",
+                  "cancelled_at", "cancelled_by_name"),
+}
+
+
+def test_official_contract_columns_exist_after_upgrade(upgraded):
+    for table, columns in _MIGRATION_4_COLUMNS.items():
+        present = {row[1] for row in upgraded.execute("PRAGMA table_info(%s)" % table)}
+        for name in columns:
+            assert name in present, "%s.%s" % (table, name)
+
+
+def test_official_contract_columns_start_empty(upgraded):
+    """عمود جديد على صفّ قديم يبقى فارغاً.
+
+    لأن ``NULL`` يقول «لا أعرف»، أمّا قيمة افتراضية فتقول «هذه بياناته» —
+    وتاريخُ ميلاد مُختلَق في ورقة عقد أسوأ من خانة خالية.
+    """
+    for table, columns in _MIGRATION_4_COLUMNS.items():
+        row = upgraded.execute("SELECT * FROM %s LIMIT 1" % table).fetchone()
+        assert row is not None, table
+        for name in columns:
+            assert row[name] is None, "%s.%s ليس فارغاً" % (table, name)
+
+
+def test_the_office_data_is_identical_after_the_upgrade(app_home):
+    """ما كتبه المكتب قبل الترقية هو نفسه بعدها — قيمةً قيمة.
+
+    الاختبارات الأخرى تعدّ الصفوف؛ وهذا يقارن **محتواها**. فترقيةٌ تُبقي العدد
+    وتُبدّل رقم لوحة أو تاريخ عقد تسقط هنا، وهي الحالة التي يخافها من يسلّم
+    التحديث لعميل يعمل عليه منذ شهور.
+    """
+    from app import config
+
+    _build_v1_database(config.DB_PATH)
+
+    before_conn = db.connect(config.DB_PATH)
+    before = {
+        table: [dict(row) for row in
+                before_conn.execute("SELECT * FROM %s ORDER BY id" % table)]
+        for table in ("customers", "vehicles", "contracts", "users")
+    }
+    before_conn.close()
+    db.close_connection()
+
+    upgraded_conn = db.initialize()
+    try:
+        for table, rows in before.items():
+            after = [dict(row) for row in
+                     upgraded_conn.execute("SELECT * FROM %s ORDER BY id" % table)]
+            assert len(after) == len(rows), table
+
+            for old_row, new_row in zip(rows, after):
+                for key, value in old_row.items():
+                    assert new_row[key] == value, \
+                        "%s.%s تغيّرت: %r ← %r" % (table, key, value, new_row[key])
+    finally:
+        db.close_connection()
+
+
+def test_the_contracts_view_exposes_the_official_fields(upgraded):
+    """العرض يُعاد بناؤه بالأعمدة الجديدة، فتجد الطباعةُ قيمها بلا استعلام ثانٍ."""
+    cursor = upgraded.execute("SELECT * FROM v_contracts_full LIMIT 0")
+    columns = {description[0] for description in cursor.description}
+    for name in ("customer_dob", "customer_license_issuer", "customer_work_address",
+                 "customer_phone_alt", "body_style", "vehicle_license_expiry",
+                 "allowed_area", "guarantees", "departure_condition",
+                 "cancelled_at", "cancelled_by_name"):
+        assert name in columns, name
+
+
+# =============================================================================
+#  نسخة ما قبل الترقية
+#
+#  الضمانة التي تُسلَّم مع التحديث لعميل يعمل على المنظومة منذ شهور: قبل أن
+#  يُمَسّ شيء، تُؤخذ نسخة كاملة يمكن الرجوع إليها.
+# =============================================================================
+def test_a_backup_is_taken_before_the_upgrade(app_home):
+    from app import config
+
+    _build_v1_database(config.DB_PATH)
+    db.close_connection()
+
+    connection = db.initialize()
+    try:
+        backups = sorted(pathlib.Path(config.BACKUP_DIR).glob(
+            migrations.PRE_UPGRADE_PREFIX + "*.db"))
+        assert backups, "رُقّيت القاعدة بلا نسخة تسبقها"
+    finally:
+        db.close_connection()
+
+
+def test_the_backup_holds_the_data_as_it_was(app_home):
+    """النسخة ليست ملفاً فارغاً يحمل الاسم: فيها بيانات المكتب كما كانت."""
+    from app import config
+
+    _build_v1_database(config.DB_PATH)
+    db.close_connection()
+
+    connection = db.initialize()
+    try:
+        backup = sorted(pathlib.Path(config.BACKUP_DIR).glob(
+            migrations.PRE_UPGRADE_PREFIX + "*.db"))[0]
+    finally:
+        db.close_connection()
+
+    saved = sqlite3.connect(str(backup))
+    try:
+        assert saved.execute("SELECT COUNT(*) FROM contracts").fetchone()[0] == 1
+        assert saved.execute(
+            "SELECT full_name FROM customers"
+        ).fetchone()[0] == "عميل قديم"
+        # وهي نسخة **ما قبل** الترقية فعلاً: عمود الترقية ٤ ليس فيها
+        columns = {row[1] for row in saved.execute("PRAGMA table_info(customers)")}
+        assert "date_of_birth" not in columns
+    finally:
+        saved.close()
+
+
+def test_no_backup_is_taken_when_there_is_nothing_to_upgrade(app_home):
+    """إقلاعٌ على قاعدة محدَّثة لا يضيف نسخة.
+
+    وإلّا امتلأ قرص المكتب بنسخ متطابقة، نسخةً في كل مرّة يُفتح فيها البرنامج.
+    """
+    from app import config
+
+    connection = db.initialize()          # قاعدة جديدة على آخر إصدار
+    db.close_connection()
+
+    for existing in pathlib.Path(config.BACKUP_DIR).glob(
+            migrations.PRE_UPGRADE_PREFIX + "*.db"):
+        existing.unlink()
+
+    connection = db.initialize()
+    try:
+        backups = list(pathlib.Path(config.BACKUP_DIR).glob(
+            migrations.PRE_UPGRADE_PREFIX + "*.db"))
+        assert not backups, "نسخة بلا ترقية: %s" % backups
+    finally:
+        db.close_connection()
+
+
+def test_a_failing_backup_does_not_block_the_upgrade(app_home, monkeypatch):
+    """تعذّر النسخة لا يمنع التحديث.
+
+    تحديثٌ يرفض أن يبدأ لأن القرص ممتلئ يترك المكتب بلا منظومة تعمل أصلاً —
+    وهو ضرر أكبر من ضرر المخاطرة التي صُمّمت الترقيات ألّا تقع فيها.
+    """
+    import shutil
+
+    from app import config
+
+    _build_v1_database(config.DB_PATH)
+    db.close_connection()
+
+    def refuse(*args, **kwargs):
+        raise OSError("القرص ممتلئ")
+
+    monkeypatch.setattr(shutil, "copy2", refuse)
+
+    connection = db.initialize()
+    try:
+        assert migrations.current_version(connection) == _latest_version()
+        assert connection.execute(
+            "SELECT full_name FROM customers"
+        ).fetchone()[0] == "عميل قديم"
+    finally:
+        db.close_connection()

@@ -16,6 +16,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = ROOT / "build" / "build_exe.ps1"
 INSTALLER = ROOT / "build" / "installer.iss"
+SIGN_SCRIPT = ROOT / "build" / "sign.ps1"
 WORKFLOW = ROOT / ".github" / "workflows" / "car-rental.yml"
 
 # أدوات بايثون التي يضعها pip في مجلد Scripts. وجود ذلك المجلد في PATH ليس
@@ -81,8 +82,8 @@ def test_the_ci_workflow_exists():
     )
 
 
-@pytest.mark.parametrize("path", [BUILD_SCRIPT, INSTALLER],
-                         ids=["build_exe.ps1", "installer.iss"])
+@pytest.mark.parametrize("path", [BUILD_SCRIPT, INSTALLER, SIGN_SCRIPT],
+                         ids=["build_exe.ps1", "installer.iss", "sign.ps1"])
 def test_windows_files_keep_their_utf8_bom(path):
     """بلا علامة BOM يقرأ PowerShell 5.1 الملفَّ بصفحة ترميز النظام لا UTF-8.
 
@@ -249,3 +250,58 @@ def test_documentation_links_point_at_real_files(doc):
     ]
 
     assert not broken, "روابط ميّتة في %s:\n  %s" % (doc.name, "\n  ".join(broken))
+
+
+# ---------------------------------------------------------------------------
+# الترقية فوق تثبيت قائم، والناشر
+# ---------------------------------------------------------------------------
+# معرّف التطبيق كما شُحن مع أول نسخة. **ثابتٌ إلى الأبد**: هو ما يعرف به
+# ويندوز أن المثبّت الجديد ترقيةٌ لما هو مثبَّت لا تطبيقٌ ثانٍ. وتغييرُه يترك
+# عميلاً بنسختين على قائمة البرامج يفتح إحداهما فلا يجد بياناته.
+SHIPPED_APP_ID = "{{8B3F1C24-7E4A-4D96-9C41-2A6F0B5D7E13}"
+
+
+def test_the_installer_keeps_the_shipped_app_id():
+    text = INSTALLER.read_text(encoding="utf-8-sig")
+    assert "AppId=" + SHIPPED_APP_ID in text, (
+        "تغيّر AppId في installer.iss — المثبّت الجديد لن يُرقّي التثبيت القائم\n"
+        "عند العميل بل سيضع نسخةً ثانية بجانبه."
+    )
+
+
+def test_the_installer_names_the_publisher():
+    """العميل يرى اسم الناشر في نافذة التثبيت وفي خصائص الملف."""
+    text = INSTALLER.read_text(encoding="utf-8-sig")
+    assert "شركة المسار المتحد" in text
+    assert "AppPublisher=" in text
+
+
+def test_the_installer_does_not_touch_the_office_data():
+    """إزالة التثبيت لا تحذف بيانات المكتب، والملف يقول ذلك صراحةً."""
+    text = INSTALLER.read_text(encoding="utf-8-sig")
+    assert "APPDATA" in text
+    # لا سطر يحذف مجلد البيانات
+    assert "{userappdata}\\CarRentalOffice" not in text.replace(" ", "")
+
+
+def test_the_signing_script_survives_having_no_certificate():
+    """سكربت التوقيع لا يكسر البناء على جهاز لا شهادة فيه.
+
+    المالك لا يملك شهادة اليوم، وسكربتٌ يفشل لغيابها يوقف سلسلة البناء كلّها
+    على أمرٍ تجاري لم يُنجَز بعد.
+    """
+    text = SIGN_SCRIPT.read_text(encoding="utf-8-sig")
+    assert "exit 0" in text, "لا مخرج ناجح حين لا شهادة"
+    assert "شركة المسار المتحد" in text
+
+
+def test_the_signing_script_timestamps_and_verifies():
+    """ختمٌ زمني وتحقّق بعد التوقيع — وإلّا كان التوقيع وعداً لا برهاناً.
+
+    بلا ختم زمني يبطل التوقيع بانتهاء صلاحية الشهادة، فيرى عميلٌ اشترى اليوم
+    تحذيراً بعد سنتين على النسخة نفسها.
+    """
+    text = SIGN_SCRIPT.read_text(encoding="utf-8-sig")
+    assert "/tr" in text, "لا ختم زمني"
+    assert "verify" in text, "لا تحقّق بعد التوقيع"
+    assert "sha256" in text, "لم تُفرض SHA-256"

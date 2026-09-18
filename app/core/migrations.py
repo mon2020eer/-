@@ -8,6 +8,8 @@
 قاعدة الإضافة: لا يُعدَّل تعديلٌ قديم أبداً بعد إطلاقه، بل تُضاف خطوة جديدة.
 """
 
+import pathlib
+
 
 def _columns(conn, table):
     return {row[1] for row in conn.execute("PRAGMA table_info(%s)" % table)}
@@ -143,11 +145,51 @@ def _migration_3(conn):
 _migration_3.foreign_keys_off = True
 
 
+def _migration_4(conn):
+    """حقول عقد الشركة الرسمي.
+
+    وُضع المخطّط الأول على ما يحتاجه **الحساب**: من استأجر، وأي سيارة، وكم.
+    أمّا ورقة العقد الموقَّعة فتطلب أكثر: تاريخ ميلاد المستأجر وجهة إصدار رخصته
+    وعنوان عمله، ومكان التجول المسموح به، والضمانات المحجوزة، وحالة السيارة
+    ساعةَ خرجت. وهذه ليست زينة: **الورقة هي الحجّة عند الخلاف**، وحقلٌ ناقص
+    فيها يعني فراغاً يُملأ بالقلم أو يُترك خالياً.
+
+    كلّها أعمدة تُضاف بلا مساس ببيانات قائمة — ``ALTER TABLE ADD COLUMN`` لا
+    يعيد بناء شيء، فبيانات المكتب تبقى كما هي حرفاً بحرف.
+    """
+    # --- العميل: ما تطلبه ترويسة العقد ---
+    _add_column(conn, "customers", "date_of_birth", "TEXT")           # تاريخ الميلاد
+    _add_column(conn, "customers", "license_issued_by", "TEXT")       # صادرة عن
+    _add_column(conn, "customers", "phone_alt", "TEXT")               # هاتف آخر
+    _add_column(conn, "customers", "work_address", "TEXT")            # عنوان العمل
+    _add_column(conn, "customers", "blacklist_reason", "TEXT")        # سبب الحظر
+
+    # --- السيارة ---
+    _add_column(conn, "vehicles", "body_style", "TEXT")               # التصميم
+    _add_column(conn, "vehicles", "license_expiry", "TEXT")           # انتهاء رخصة السيارة
+
+    # --- العقد: بنود الورقة الموقَّعة ---
+    _add_column(conn, "contracts", "allowed_area", "TEXT")            # مكان التجول
+    _add_column(conn, "contracts", "guarantees", "TEXT")              # الضمانات المحجوزة
+    _add_column(conn, "contracts", "departure_condition", "TEXT")     # حالة السيارة عند المغادرة
+    _add_column(conn, "contracts", "renewed_until", "TEXT")           # تم تجديد العقد إلى يوم
+    _add_column(conn, "contracts", "guarantor_phone", "TEXT")         # هاتف الكفيل
+    _add_column(conn, "contracts", "guarantor_work_address", "TEXT")  # عنوان عمل الكفيل
+
+    # --- أثر الإلغاء: يُكتب على الورقة لا في السجلّ وحده ---
+    _add_column(conn, "contracts", "cancelled_at", "TEXT")
+    _add_column(conn, "contracts", "cancelled_by_name", "TEXT")
+
+    # العرض يختار كل أعمدة العقود والعملاء، فيُعاد بناؤه بالأعمدة الجديدة
+    conn.execute("DROP VIEW IF EXISTS v_contracts_full")
+
+
 # (رقم الإصدار، الدالة) بترتيب تصاعدي
 MIGRATIONS = [
     (1, _migration_1),
     (2, _migration_2),
     (3, _migration_3),
+    (4, _migration_4),
 ]
 
 
@@ -187,9 +229,55 @@ def _apply_one(conn, target, migrate):
             conn.execute("PRAGMA foreign_keys = %s" % ("ON" if previous_fk else "OFF"))
 
 
+# اسم نسخة ما قبل الترقية. ثابتٌ هنا فيجده دليل الترقية ويجده المستخدم.
+PRE_UPGRADE_PREFIX = "before-upgrade"
+
+
+def backup_before_upgrade(conn):
+    """ينسخ قاعدة البيانات قبل أوّل ترقية تُطبَّق عليها، ويُرجع مسار النسخة.
+
+    **هذه هي الضمانة التي تُسلَّم للعميل مع التحديث.** الترقيات نفسها لا تحذف
+    شيئاً — ``ALTER TABLE ADD COLUMN`` لا يعيد بناء جدول — لكن بين «مصمَّمة
+    ألّا تُتلف» و«يمكن الرجوع لو أتلفت» فرقٌ يساوي شهور عمل مكتب.
+
+    والنسخة تُؤخذ **مرّةً واحدة** حين يكون هناك ما يُرقّى فعلاً: أخذُها في كل
+    إقلاع يملأ قرص المكتب بنسخ متطابقة.
+
+    يُرجع ``None`` حين لا شيء يُرقّى، أو حين تتعذّر النسخة — وتعذّرها لا يوقف
+    الترقية: تحديثٌ يرفض أن يبدأ لأن القرص ممتلئ يترك المكتب بلا منظومة أصلاً.
+    """
+    import datetime
+    import shutil
+
+    from .. import config
+
+    if current_version(conn) >= max(number for number, _ in MIGRATIONS):
+        return None
+
+    source = pathlib.Path(config.DB_PATH)
+    if not source.is_file():
+        return None                      # قاعدة جديدة: لا شيء يُنسخ
+
+    try:
+        # تُفرَّغ سجلّات WAL في الملف الأصلي قبل نسخه، وإلّا نُسخت قاعدة تنقصها
+        # آخر المعاملات — وهي أهمّها: أحدث ما كتبه المكتب.
+        conn.execute("PRAGMA wal_checkpoint(FULL)")
+
+        destination = pathlib.Path(config.BACKUP_DIR) / (
+            "%s-v%d-%s.db" % (PRE_UPGRADE_PREFIX, current_version(conn),
+                              datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        return destination
+    except Exception:
+        return None
+
+
 def apply(conn):
     """يطبّق كل الترقيات الأحدث من الإصدار المخزَّن، ويُرجع الإصدار النهائي."""
     version = current_version(conn)
+    backup_before_upgrade(conn)
 
     for target, migrate in MIGRATIONS:
         if target <= version:

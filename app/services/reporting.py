@@ -231,7 +231,7 @@ def fleet_report(conn=None):
 # التصدير
 # ---------------------------------------------------------------------------
 @features.requires_feature("export")
-def export_rows_to_csv(rows, headers, path, money_columns=()):
+def export_rows_to_csv(rows, headers, path, money_columns=(), conn=None):
     """يصدّر صفوفاً إلى ملف CSV يفتحه Excel العربي بلا تشويه.
 
     يُكتب الملف بترميز ``utf-8-sig`` (مع علامة BOM) لأن Excel على ويندوز
@@ -240,8 +240,22 @@ def export_rows_to_csv(rows, headers, path, money_columns=()):
     session.require_login()
     path = str(path)
 
+    from . import branding
+
+    identity = branding.identity(conn=conn)
+
     with open(path, "w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
+
+        # ترويسة الهوية فوق الجدول: تقريرٌ يُطبع أو يُرسَل بالبريد يجب أن يقول
+        # من أصدره وفي أي يوم، وإلّا صار ورقةَ أرقام بلا صاحب.
+        writer.writerow([identity["name"]])
+        contact = branding.contact_line(conn=conn)
+        if contact:
+            writer.writerow([contact])
+        writer.writerow(["تاريخ التقرير", datetime.date.today().isoformat()])
+        writer.writerow([])
+
         writer.writerow([label for _, label in headers])
 
         for row in rows:
@@ -272,6 +286,7 @@ def export_outstanding_csv(path, conn=None):
     return export_rows_to_csv(
         outstanding_report(conn=conn), headers, path,
         money_columns=("total_amount", "paid_amount", "balance_due"),
+        conn=conn,
     )
 
 
@@ -293,6 +308,7 @@ def export_fleet_csv(path, conn=None):
     return export_rows_to_csv(
         fleet_report(conn=conn), headers, path,
         money_columns=("daily_rate", "weekly_rate", "revenue"),
+        conn=conn,
     )
 
 
@@ -318,4 +334,5 @@ def export_contracts_csv(path, rows=None, conn=None):
     return export_rows_to_csv(
         rows, headers, path,
         money_columns=("total_amount", "paid_amount", "balance_due"),
+        conn=conn,
     )

@@ -98,6 +98,7 @@ powershell -ExecutionPolicy Bypass -File build\build_exe.ps1
 |---|---|
 | ⭐ [`docs/INSTALL.md`](docs/INSTALL.md) | **ابدأ من هنا**: التشغيل من الصفر على أي حاسوب — مسارٌ لجهاز المكتب وآخر للبناء والتوزيع |
 | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | دليل المستخدم: كيف تدير يوم عمل كامل بالمنظومة |
+| [`docs/UPGRADE.md`](docs/UPGRADE.md) | ترقية جهاز عميل يعمل على نسخة أقدم — دون أن يفقد بياناته |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | المعمارية ومخطط قاعدة البيانات وقرارات التصميم |
 | [`docs/GOOGLE_DRIVE_SETUP.md`](docs/GOOGLE_DRIVE_SETUP.md) | إعداد النسخ الاحتياطي على Google Drive خطوة بخطوة |
 | [`docs/BUILD_WINDOWS.md`](docs/BUILD_WINDOWS.md) | حزم التطبيق في ملف `.exe` ومثبّت ويندوز |

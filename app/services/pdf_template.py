@@ -72,14 +72,19 @@ FIELDS = (
     ("customer_national_id", "رقم جواز السفر",        "المستأجر"),
     ("customer_license",     "رقم رخصة القيادة",      "المستأجر"),
     ("customer_license_expiry", "صلاحية الرخصة",      "المستأجر"),
+    ("customer_license_issuer", "صادرة عن",           "المستأجر"),
+    ("customer_dob",         "تاريخ الميلاد",         "المستأجر"),
     ("customer_address",     "عنوان السكن",           "المستأجر"),
     ("customer_phone",       "الهاتف",                "المستأجر"),
+    ("customer_work_address", "عنوان العمل",          "المستأجر"),
+    ("customer_phone_alt",   "هاتف العمل / هاتف آخر", "المستأجر"),
 
     ("vehicle_type",         "نوع السيارة",           "السيارة"),
     ("vehicle_plate",        "رقم اللوحة",            "السيارة"),
     ("vehicle_chassis",      "رقم الهيكل",            "السيارة"),
     ("vehicle_year",         "سنة الصنع",             "السيارة"),
     ("vehicle_color",        "اللون",                 "السيارة"),
+    ("vehicle_body_style",   "التصميم",               "السيارة"),
     ("vehicle_odometer",     "قراءة العدّاد",          "السيارة"),
 
     ("contract_number",      "رقم العقد",             "العقد"),
@@ -89,7 +94,14 @@ FIELDS = (
     # وساعاتٌ في المُغلَق بالاحتساب الساعي. والمفتاح ثابت فلا تنكسر تعيينات
     # المكاتب القائمة.
     ("days_count",           "المدّة",                 "العقد"),
-    ("pickup_location",      "مكان التجوّل",           "العقد"),
+    # التسمية صُحّحت: هذا الحقل هو **مكان الاستلام** الذي يُكتب في حوار العقد،
+    # وكان معنوناً «مكان التجوّل» خطأً. ومكان التجوّل صار حقلاً مستقلاً أدناه،
+    # فمن عيّن القديم على خانة التجوّل في ورقته فليُعِد تعيينها.
+    ("pickup_location",      "مكان الاستلام",         "العقد"),
+    ("allowed_area",         "مكان التجوّل",           "العقد"),
+    ("guarantees",           "الضمانات المحجوزة",     "العقد"),
+    ("departure_condition",  "حالة السيارة عند المغادرة", "العقد"),
+    ("renewed_until",        "تم تجديد العقد إلى يوم", "العقد"),
     ("today",                "تاريخ اليوم",           "العقد"),
 
     ("total_amount",         "إجمالي المبلغ",         "المبالغ"),
@@ -101,9 +113,14 @@ FIELDS = (
     ("guarantor_nationality", "جنسية الكفيل",         "الكفيل"),
     ("guarantor_passport",   "رقم جواز الكفيل",       "الكفيل"),
     ("guarantor_address",    "عنوان الكفيل",          "الكفيل"),
+    ("guarantor_phone",      "هاتف الكفيل",           "الكفيل"),
+    ("guarantor_work_address", "عنوان عمل الكفيل",    "الكفيل"),
 
-    ("office_name",          "اسم المكتب",            "المكتب"),
-    ("office_phone",         "هاتف المكتب",           "المكتب"),
+    ("office_name",          "اسم الشركة",            "المكتب"),
+    ("office_phone",         "هاتف الشركة",           "المكتب"),
+    ("office_phone_alt",     "هاتف آخر",              "المكتب"),
+    ("office_address",       "عنوان الشركة",          "المكتب"),
+    ("office_register",      "السجلّ التجاري",         "المكتب"),
 )
 
 FIELD_LABELS = {key: label for key, label, _ in FIELDS}
@@ -351,13 +368,14 @@ def values_for_contract(contract_id, conn=None):
 
     from ..core import money
     from ..repositories import contracts_repo
+    from . import branding
 
     contract = contracts_repo.get(contract_id, conn=conn)
     if contract is None:
         raise TemplateError("العقد غير موجود.")
 
     symbol = settings_repo.symbol_of(contract["currency_code"], conn=conn)
-    settings = settings_repo.all_settings(conn=conn)
+    identity = branding.identity(conn=conn)
 
     def amount(minor):
         return money.format_amount(minor or 0, symbol)
@@ -388,14 +406,19 @@ def values_for_contract(contract_id, conn=None):
         "customer_national_id":   column("customer_national_id"),
         "customer_license":       column("customer_license_number"),
         "customer_license_expiry": column("customer_license_expiry"),
+        "customer_license_issuer": column("customer_license_issuer"),
+        "customer_dob":           column("customer_dob"),
         "customer_address":       column("customer_address"),
         "customer_phone":         column("customer_phone"),
+        "customer_work_address":  column("customer_work_address"),
+        "customer_phone_alt":     column("customer_phone_alt"),
 
         "vehicle_type":     ("%s %s" % (column("brand"), column("model"))).strip(),
         "vehicle_plate":    column("plate_number"),
         "vehicle_chassis":  column("chassis_number"),
         "vehicle_year":     column("year"),
         "vehicle_color":    column("color"),
+        "vehicle_body_style": column("body_style"),
         "vehicle_odometer": column("start_odometer"),
 
         "contract_number":  column("contract_number"),
@@ -403,6 +426,10 @@ def values_for_contract(contract_id, conn=None):
         "end_date":         column("actual_end_date") or column("expected_end_date"),
         "days_count":       duration_value,
         "pickup_location":  column("pickup_location"),
+        "allowed_area":       column("allowed_area"),
+        "guarantees":         column("guarantees"),
+        "departure_condition": column("departure_condition"),
+        "renewed_until":      column("renewed_until"),
         "today":            datetime.date.today().isoformat(),
 
         "total_amount":   amount(contract["total_amount"]),
@@ -414,9 +441,14 @@ def values_for_contract(contract_id, conn=None):
         "guarantor_nationality": column("guarantor_nationality"),
         "guarantor_passport":    column("guarantor_passport"),
         "guarantor_address":     column("guarantor_address"),
+        "guarantor_phone":       column("guarantor_phone"),
+        "guarantor_work_address": column("guarantor_work_address"),
 
-        "office_name":  _text(settings.get("office_name"), config.APP_TITLE_AR),
-        "office_phone": _text(settings.get("office_phone")),
+        "office_name":      identity["name"],
+        "office_phone":     identity["phone"],
+        "office_phone_alt": identity["phone_alt"],
+        "office_address":   identity["address"],
+        "office_register":  identity["commercial_register"],
     }
 
 
@@ -435,14 +467,19 @@ def sample_values():
         "customer_national_id": "119876543210",
         "customer_license": "LC-4455",
         "customer_license_expiry": (today.replace(year=today.year + 2)).isoformat(),
+        "customer_license_issuer": "إدارة المرور — طرابلس",
+        "customer_dob": "1988-04-17",
         "customer_address": "طرابلس — شارع الجمهورية",
         "customer_phone": "0912345678",
+        "customer_work_address": "طرابلس — شارع عمر المختار، مبنى الرواد",
+        "customer_phone_alt": "0925556677",
 
         "vehicle_type": "تويوتا كورولا",
         "vehicle_plate": "5-12345",
         "vehicle_chassis": "JTDBR32E030098765",
         "vehicle_year": "2022",
         "vehicle_color": "أبيض",
+        "vehicle_body_style": "صالون",
         "vehicle_odometer": "42000",
 
         "contract_number": "CR-%d-0001" % today.year,
@@ -450,6 +487,10 @@ def sample_values():
         "end_date": (today + datetime.timedelta(days=7)).isoformat(),
         "days_count": "7",
         "pickup_location": "مقرّ المكتب",
+        "allowed_area": "طرابلس ومصراتة والزاوية فقط",
+        "guarantees": "عدد (2) شيكات مؤجَّلة + جواز سفر",
+        "departure_condition": "خدش في الرفرف الأيمن، الإطارات سليمة، الوقود نصف خزّان",
+        "renewed_until": (today + datetime.timedelta(days=14)).isoformat(),
         "today": today.isoformat(),
 
         "total_amount": "900.00 د.ل",
@@ -461,7 +502,12 @@ def sample_values():
         "guarantor_nationality": "ليبي",
         "guarantor_passport": "P-778899",
         "guarantor_address": "طرابلس — حي الأندلس",
+        "guarantor_phone": "0913334455",
+        "guarantor_work_address": "طرابلس — سوق الجمعة",
 
-        "office_name": "مكتب النور لإيجار السيارات",
+        "office_name": "شركة المسار المتحد",
         "office_phone": "0918887777",
+        "office_phone_alt": "0925556677",
+        "office_address": "طرابلس — شارع الشط",
+        "office_register": "TR-2024-118834",
     }
