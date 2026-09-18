@@ -230,15 +230,20 @@ _WATERMARK_COLOR = QColor(185, 28, 28, 60)
 _WATERMARK_ANGLE = -35
 
 
-def _print_with_watermark(document, printer, text):
-    """يطبع المستند صفحةً صفحة ويرسم ختماً مائلاً فوق **كل** صفحة.
+def print_paged(document, printer, on_page=None, reserve_bottom=0):
+    """يطبع مستنداً صفحةً صفحة، ويستدعي ``on_page`` فوق كل صفحة بعد رسمها.
 
     **لماذا لا ``document.print()``؟** لأنها تفتح الرسّام وتُغلقه بنفسها، فلا
-    يبقى ما يُرسم به فوق ما طُبع. و``QTextDocument`` لا تدعم التدوير أصلاً،
-    فلا سبيل إلى ختم مائل من داخل HTML.
+    يبقى ما يُرسم به فوق ما طُبع. وكل ما يُراد وضعه على كل صفحة — ختمُ إلغاء
+    مائل، أو ترقيمُ صفحات في كشف حساب — يحتاج هذا المسار.
 
-    ورقةُ عقدٍ مُلغى قد تحمل شروطها في صفحة ثانية، وختمٌ على الأولى وحدها
-    يجعل الصفحة الثانية تبدو سارية إن فُصلت — ولذلك يُرسم على كل صفحة.
+    ``on_page(painter, page_size, index, total)`` — والإحداثيات بالنقاط
+    الطباعية (٧٢/بوصة) لأن الرسّام مقيسٌ إليها، فما يُرسم لا يتبع دقّة الطابعة.
+    و``page_size`` هو **الصفحة كاملة**، لا منطقة النصّ وحدها.
+
+    ``reserve_bottom`` شريطٌ بالنقاط يُحجز أسفل كل صفحة **فلا يصل إليه النصّ**.
+    بدونه يُرسم التذييل فوق آخر سطر في الجدول فيختلط به حرفياً — قيس هذا على
+    كشف حساب فخرج «صفحة ١ من ٢» مشتبكاً بأرقام آخر عقد.
     """
     # **الوحدات هي مربط الفرس.** ``document.print()`` تتكفّل بالتحويل وحدها،
     # أمّا الرسم اليدوي فيقع في بكسلات الجهاز (١٢٠٠ نقطة/بوصة)، بينما يقيس
@@ -248,30 +253,53 @@ def _print_with_watermark(document, printer, text):
     #
     # فتُضبط الصفحة بالنقاط كما كانت، ويُقاس الرسّام إليها.
     page_size = printer.pageRect(QPrinter.Unit.Point).size()
-    document.setPageSize(page_size)
+
+    # النصّ يُصفّ في مساحة أقصر من الصفحة بمقدار الشريط المحجوز، ويبقى
+    # ``page_size`` كاملاً لأن التذييل يُرسم في الشريط نفسه.
+    reserve_bottom = max(0, float(reserve_bottom or 0))
+    text_size = QSizeF(page_size.width(),
+                       max(1.0, page_size.height() - reserve_bottom))
+    document.setPageSize(text_size)
     scale = printer.resolution() / 72.0
+
+    total = document.pageCount()
 
     painter = QPainter(printer)
     painter.scale(scale, scale)
     try:
-        for page in range(document.pageCount()):
+        for page in range(total):
             if page:
                 printer.newPage()
 
             # كل صفحة شريحةٌ من مستند واحد متّصل: يُزاح الرسم إلى أعلاها
             # ويُقصّ عليها، وإلّا طُبع المستند كلّه فوق كل صفحة.
             painter.save()
-            painter.translate(0, -page * page_size.height())
+            painter.translate(0, -page * text_size.height())
             document.drawContents(
                 painter,
-                QRectF(0, page * page_size.height(),
-                       page_size.width(), page_size.height()),
+                QRectF(0, page * text_size.height(),
+                       text_size.width(), text_size.height()),
             )
             painter.restore()
 
-            _draw_watermark(painter, page_size, text)
+            if on_page is not None:
+                on_page(painter, page_size, page, total)
     finally:
         painter.end()
+
+
+def _print_with_watermark(document, printer, text):
+    """يطبع المستند وعليه ختم الإلغاء المائل فوق **كل** صفحة.
+
+    ورقةُ عقدٍ مُلغى قد تحمل شروطها في صفحة ثانية، وختمٌ على الأولى وحدها
+    يجعل الصفحة الثانية تبدو سارية إن فُصلت — ولذلك يُرسم على كل صفحة.
+    """
+    print_paged(
+        document, printer,
+        lambda painter, page_size, index, total: _draw_watermark(
+            painter, page_size, text
+        ),
+    )
 
 
 def _draw_watermark(painter, page_size, text):

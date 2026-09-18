@@ -12,10 +12,10 @@ from PyQt6.QtWidgets import (
 from ... import config
 from ...core import money
 from ...repositories import settings_repo
-from ...services import reporting
+from ...services import reporting, statement
 from ..widgets.common import (
-    Card, DataTable, PageHeader, scrollable_body, StatCard, date_field, primary_button, show_error,
-    show_info,
+    Card, DataTable, PageHeader, scrollable_body, StatCard, combo, date_field,
+    primary_button, show_error, show_info,
 )
 
 
@@ -47,6 +47,37 @@ class ReportsPage(QWidget):
         header.add_action(apply_button)
 
         layout.addWidget(header)
+
+        # --- الفترات السريعة ---
+        # الصفحة كانت تُلزم كتابة تاريخين لكل استعلام، وهذه الأربع هي ما
+        # يُطلب فعلاً كل يوم: جردُ اليوم، والأسبوع، والشهر، والسنة.
+        quick = QHBoxLayout()
+        quick.setSpacing(8)
+        quick.addWidget(QLabel("فترة سريعة:"))
+        for label, granularity, span in (
+            ("اليوم", "daily", "day"),
+            ("هذا الأسبوع", "daily", "week"),
+            ("هذا الشهر", "daily", "month"),
+            ("هذه السنة", "monthly", "year"),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda _checked=False, g=granularity, s=span: self._quick_period(g, s)
+            )
+            quick.addWidget(button)
+
+        quick.addSpacing(16)
+        quick.addWidget(QLabel("تقسيم الكشف"))
+        self.granularity = combo(
+            [(key, label) for key, label, _ in statement.GRANULARITIES]
+        )
+        index = self.granularity.findData(statement.DEFAULT_GRANULARITY)
+        if index >= 0:
+            self.granularity.setCurrentIndex(index)
+        quick.addWidget(self.granularity)
+        quick.addStretch(1)
+
+        layout.addLayout(quick)
 
         # --- ملخّص مالي ---
         cards = QGridLayout()
@@ -118,6 +149,19 @@ class ReportsPage(QWidget):
 
         # --- التصدير ---
         exports = QHBoxLayout()
+
+        # كشف الحساب أوّلاً وبزرّ رئيسي: هو الورقة التي يطلبها المحاسب،
+        # وملفّات CSV مادّةٌ خام إلى جانبه.
+        print_statement = primary_button("طباعة كشف الحساب")
+        print_statement.clicked.connect(self._print_statement)
+        exports.addWidget(print_statement)
+
+        save_statement = QPushButton("حفظ الكشف PDF")
+        save_statement.clicked.connect(self._save_statement)
+        exports.addWidget(save_statement)
+
+        exports.addSpacing(16)
+
         for label, handler in (
             ("تصدير الديون (CSV)", self._export_outstanding),
             ("تصدير الأسطول (CSV)", self._export_fleet),
@@ -128,8 +172,12 @@ class ReportsPage(QWidget):
             exports.addWidget(button)
         exports.addStretch(1)
 
-        hint = QLabel("ملفات CSV تُفتح مباشرةً في Excel مع دعم كامل للعربية.")
+        hint = QLabel(
+            "كشف الحساب ورقة فيها كل عقد بسطره وملخّصٌ مالي تتطابق أرقامه.\n"
+            "وملفّات CSV تُفتح مباشرةً في Excel مع دعم كامل للعربية."
+        )
         hint.setObjectName("hint")
+        hint.setWordWrap(True)
         exports.addWidget(hint)
 
         layout.addLayout(exports)
@@ -174,6 +222,89 @@ class ReportsPage(QWidget):
             return
         show_info(self, "تم التصدير إلى:\n%s" % path)
 
+    # ------------------------------------------------------------------
+    # كشف الحساب
+    # ------------------------------------------------------------------
+    def _quick_period(self, granularity, span):
+        """يضبط الفترة والتقسيم معاً بضغطة واحدة."""
+        today = QDate.currentDate()
+        if span == "day":
+            start = end = today
+        elif span == "week":
+            # الأسبوع يبدأ السبت في أعراف المكاتب هنا لا الاثنين كما في Qt
+            start = today.addDays(-((today.dayOfWeek() + 1) % 7))
+            end = start.addDays(6)
+        elif span == "month":
+            start = today.addDays(-(today.day() - 1))
+            end = start.addMonths(1).addDays(-1)
+        else:
+            start = QDate(today.year(), 1, 1)
+            end = QDate(today.year(), 12, 31)
+
+        self.start_date.setDate(start)
+        self.end_date.setDate(end)
+
+        index = self.granularity.findData(granularity)
+        if index >= 0:
+            self.granularity.setCurrentIndex(index)
+
+        self.refresh()
+
+    def _statement_args(self):
+        start, end = self._period()
+        if start > end:
+            show_error(self, "تاريخ البداية يجب أن يسبق تاريخ النهاية.")
+            return None
+        return start, end, self.granularity.currentData()
+
+    def _print_statement(self):
+        """يؤرشف الكشف ثم يطبعه صامتاً — كزرّ طباعة العقد تماماً."""
+        args = self._statement_args()
+        if args is None:
+            return
+        start, end, granularity = args
+
+        try:
+            path, printer = statement.print_statement(start, end, granularity)
+        except Exception as error:
+            show_error(self, "تعذّر إصدار الكشف: %s" % error)
+            return
+
+        if printer:
+            show_info(self, "طُبع كشف الحساب على «%s»،\nوحُفظت نسخة في:\n%s"
+                            % (printer, path))
+        else:
+            show_info(
+                self,
+                "حُفظ كشف الحساب في:\n%s\n\n"
+                "لم يُعثر على طابعة مثبَّتة على هذا الجهاز، فاطبع الملف من مكانه."
+                % path,
+            )
+
+    def _save_statement(self):
+        """يحفظ الكشف حيث يختار المكتب — دون طباعة."""
+        args = self._statement_args()
+        if args is None:
+            return
+        start, end, granularity = args
+
+        suggested = statement.FILE_NAME_TEMPLATE % (start, end)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "حفظ كشف الحساب",
+            str(config.EXPORTS_DIR / suggested), "ملفات PDF (*.pdf)"
+        )
+        if not path:
+            return
+
+        try:
+            config.ensure_directories()
+            saved = statement.export_pdf(start, end, granularity, output_path=path)
+        except Exception as error:
+            show_error(self, "تعذّر إصدار الكشف: %s" % error)
+            return
+        show_info(self, "حُفظ كشف الحساب في:\n%s" % saved)
+
+    # ------------------------------------------------------------------
     def _export_outstanding(self):
         self._export(reporting.export_outstanding_csv, "الديون_المستحقة.csv")
 
