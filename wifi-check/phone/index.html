@@ -176,6 +176,7 @@ body.android .os-android, body.ios .os-ios, body.other .os-other { display: bloc
       <input id="manualDown" type="text" class="numin" inputmode="decimal" autocomplete="off" placeholder="45">
     </div>
     <button class="btn" id="runTest">ابدأ الاختبار</button>
+    <button class="btn ghost" id="stopTest" hidden>وقّف الاختبار واكتب الرقم بنفسي</button>
     <button class="btn" id="speedNext" hidden>التالي</button>
   </section>
 
@@ -378,16 +379,32 @@ body.android .os-android, body.ios .os-ios, body.other .os-other { display: bloc
   function mbps(bytes, ms) { return ms > 0 ? (bytes * 8) / (ms / 1000) / 1e6 : 0; }
   function fmt(n) { return n >= 100 ? Math.round(n) : (Math.round(n * 10) / 10); }
 
+  // كل طلب له مهلة، عشان ما يعلق الاختبار لو طلب واحد وقف
+  function fetchT(url, opts, ms) {
+    opts = opts || {};
+    var c = "AbortController" in window ? new AbortController() : null;
+    if (c) opts.signal = c.signal;
+    var t;
+    return Promise.race([
+      fetch(url, opts),
+      new Promise(function (_, rej) { t = setTimeout(function () { if (c) try { c.abort(); } catch (e) {} rej(new Error("timeout")); }, ms); })
+    ]).then(function (r) { clearTimeout(t); return { res: r, ctrl: c }; }, function (e) { clearTimeout(t); throw e; });
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  var cancelled = false;
+
   function pingTest() {
-    var times = [], i = 0;
+    var times = [], fails = 0, i = 0;
     function one() {
       var t = performance.now();
-      return fetch(CF + "/__down?bytes=0&r=" + Math.random(), { cache: "no-store" }).then(function (r) { return r.arrayBuffer(); })
-        .then(function () { times.push(performance.now() - t); });
+      return fetchT(CF + "/__down?bytes=0&r=" + Math.random(), { cache: "no-store" }, 3000)
+        .then(function (x) { return x.res.arrayBuffer(); })
+        .then(function () { times.push(performance.now() - t); }, function () { fails++; });
     }
-    function loop() { return i++ < 8 ? one().then(loop) : null; }
+    function loop() { return (i++ < 8 && fails < 3 && !cancelled) ? one().then(loop) : Promise.resolve(); }
     return loop().then(function () {
-      times.shift(); // اول طلب فيه فتح الاتصال
+      if (!times.length) throw new Error("ping");
+      if (times.length > 2) times.shift(); // اول طلب فيه فتح الاتصال
       times.sort(function (a, b) { return a - b; });
       var med = times[Math.floor(times.length / 2)];
       var j = 0; for (var k = 1; k < times.length; k++) j += Math.abs(times[k] - times[k - 1]);
@@ -395,51 +412,73 @@ body.android .os-android, body.ios .os-ios, body.other .os-other { display: bloc
     });
   }
 
-  // تحميل بعدة اتصالات مع عرض السرعة مباشرة
+  // التحميل: ينتهي بوقت ثابت مهما صار، ويحسب اللي وصل لين ذاك الوقت
   function downloadTest(seconds) {
-    var total = 0, start = performance.now(), stop = false, ctrls = [];
-    var timer = setInterval(function () {
-      var el = performance.now() - start;
-      gNum.textContent = fmt(mbps(total, el));
-      gBar.style.width = Math.min(100, 20 + (el / (seconds * 1000)) * 50) + "%";
-      if (el > seconds * 1000) { stop = true; ctrls.forEach(function (c) { try { c.abort(); } catch (e) {} }); }
-    }, 200);
+    var total = 0, start = performance.now(), done = false, ctrls = [];
+    var limit = seconds * 1000;
     function stream() {
-      if (stop) return Promise.resolve();
-      var c = "AbortController" in window ? new AbortController() : null; if (c) ctrls.push(c);
-      return fetch(CF + "/__down?bytes=50000000&r=" + Math.random(), { cache: "no-store", signal: c ? c.signal : undefined })
-        .then(function (res) {
-          if (!res.ok) throw new Error("http " + res.status);
-          if (!res.body || !res.body.getReader) return res.arrayBuffer().then(function (b) { total += b.byteLength; });
-          var rd = res.body.getReader();
-          function pump() { return rd.read().then(function (x) { if (x.done || stop) return; total += x.value.byteLength; return pump(); }); }
+      if (done || cancelled) return Promise.resolve();
+      return fetchT(CF + "/__down?bytes=25000000&r=" + Math.random(), { cache: "no-store" }, 8000)
+        .then(function (x) {
+          if (x.ctrl) ctrls.push(x.ctrl);
+          if (!x.res.ok) throw new Error("http " + x.res.status);
+          if (!x.res.body || !x.res.body.getReader) return x.res.arrayBuffer().then(function (b) { if (!done) total += b.byteLength; });
+          var rd = x.res.body.getReader();
+          function pump() {
+            if (done) { try { rd.cancel(); } catch (e) {} return; }
+            return rd.read().then(function (r) { if (r.done) return; if (!done) total += r.value.byteLength; return pump(); });
+          }
           return pump();
         })
-        .catch(function (e) { if (!stop) throw e; })
-        .then(function () { if (!stop) return stream(); });
+        .catch(function () { return sleep(400); })
+        .then(function () { return stream(); });
     }
-    var all = [stream(), stream(), stream(), stream()];
-    return Promise.all(all).then(function () {
-      clearInterval(timer);
-      return mbps(total, Math.min(performance.now() - start, seconds * 1000 + 300));
-    }, function (e) { clearInterval(timer); stop = true; throw e; });
+    for (var s = 0; s < 4; s++) stream();
+    return new Promise(function (resolve, reject) {
+      var timer = setInterval(function () {
+        var el = performance.now() - start;
+        gNum.textContent = fmt(mbps(total, el));
+        gBar.style.width = Math.min(70, 20 + (el / limit) * 50) + "%";
+        gPhase.textContent = "اقيس سرعة التحميل... باقي " + Math.max(0, Math.ceil((limit - el) / 1000)) + " ثانية";
+        var finish = el >= limit || cancelled || (el > 6000 && total === 0);
+        if (!finish) return;
+        clearInterval(timer); done = true;
+        ctrls.forEach(function (c) { try { c.abort(); } catch (e) {} });
+        if (cancelled) reject(new Error("cancel"));
+        else if (total === 0) reject(new Error("nodata"));
+        else resolve(mbps(total, el));
+      }, 200);
+    });
   }
 
+  // الرفع: قطع صغيرة تكبر حسب السرعة، والعداد يتحرك، وينتهي بوقت ثابت
   function uploadTest(seconds) {
-    var size = 4 * 1024 * 1024, blob = new Blob([new Uint8Array(size)], { type: "text/plain" });
-    var total = 0, start = performance.now();
+    var total = 0, start = performance.now(), done = false, chunk = 256 * 1024;
+    var limit = seconds * 1000;
     function stream() {
-      if (performance.now() - start > seconds * 1000) return Promise.resolve();
-      return fetch(CF + "/__up?r=" + Math.random(), { method: "POST", body: blob, cache: "no-store" })
+      if (done || cancelled) return Promise.resolve();
+      var size = chunk, t = performance.now();
+      var blob = new Blob([new Uint8Array(size)], { type: "text/plain" });
+      return fetchT(CF + "/__up?r=" + Math.random(), { method: "POST", body: blob, cache: "no-store" }, Math.max(1000, limit - (t - start) + 500))
         .then(function () {
+          if (done) return;
           total += size;
-          var el = performance.now() - start;
-          gNum.textContent = fmt(mbps(total, el));
-          gBar.style.width = Math.min(100, 70 + (el / (seconds * 1000)) * 30) + "%";
-          return stream();
-        });
+          if (performance.now() - t < 1000 && chunk < 4 * 1024 * 1024) chunk *= 2;
+        }, function () { return sleep(300); })
+        .then(function () { return stream(); });
     }
-    return Promise.all([stream(), stream(), stream()]).then(function () { return mbps(total, performance.now() - start); });
+    for (var s = 0; s < 3; s++) stream();
+    return new Promise(function (resolve) {
+      var timer = setInterval(function () {
+        var el = performance.now() - start;
+        gNum.textContent = fmt(mbps(total, el));
+        gBar.style.width = Math.min(100, 70 + (el / limit) * 30) + "%";
+        gPhase.textContent = "اقيس سرعة الرفع... باقي " + Math.max(0, Math.ceil((limit - el) / 1000)) + " ثانية";
+        if (el < limit && !cancelled) return;
+        clearInterval(timer); done = true;
+        resolve(mbps(total, el));
+      }, 200);
+    });
   }
 
   function speedVerdict() {
@@ -450,25 +489,38 @@ body.android .os-android, body.ios .os-ios, body.other .os-other { display: bloc
     v.innerHTML = "<strong>تحصل " + r + "% من باقتك (" + fmt(S.down) + " من " + S.plan + " ميغابت)</strong>" + msg;
   }
 
+  function showManual(reason) {
+    gPhase.textContent = reason;
+    $("#manualSpeed").hidden = false; $("#runTest").hidden = true; $("#stopTest").hidden = true; $("#speedNext").hidden = false;
+  }
+
+  $("#stopTest").onclick = function () { cancelled = true; };
   $("#runTest").onclick = function () {
     var btn = this; btn.disabled = true; btn.textContent = "جاري الاختبار...";
+    cancelled = false; $("#stopTest").hidden = false;
     gPhase.textContent = "اقيس الاستجابة..."; gBar.style.width = "5%";
     pingTest().then(function (p) {
       S.ping = p.ping; S.jitter = p.jitter;
       $("#stats").hidden = false; $("#sPing").textContent = p.ping;
-      gPhase.textContent = "اقيس سرعة التحميل..."; gBar.style.width = "20%";
+      gBar.style.width = "20%";
       return downloadTest(10);
     }).then(function (d) {
       S.down = d; $("#sDown").textContent = fmt(d);
-      gPhase.textContent = "اقيس سرعة الرفع...";
-      return uploadTest(6).catch(function () { return 0; });
+      return uploadTest(8);
     }).then(function (u) {
-      S.up = u; S.auto = true; $("#sUp").textContent = u ? fmt(u) : "-";
+      S.up = u; S.auto = true; $("#sUp").textContent = u >= 0.1 ? fmt(u) : "اقل من 0.1";
       gNum.textContent = fmt(S.down); gPhase.textContent = "خلص الاختبار. الرقم الكبير هو سرعة التحميل."; gBar.style.width = "100%";
-      speedVerdict(); btn.hidden = true; $("#speedNext").hidden = false;
-    }).catch(function () {
-      gPhase.textContent = "ما قدرت اوصل لموقع الاختبار من هنا.";
-      $("#manualSpeed").hidden = false; btn.hidden = true; $("#speedNext").hidden = false;
+      $("#stopTest").hidden = true; speedVerdict(); btn.hidden = true; $("#speedNext").hidden = false;
+    }).catch(function (e) {
+      if (S.down > 0) { // التحميل انقاس، نكمل فيه
+        S.auto = true; $("#stopTest").hidden = true; btn.hidden = true; $("#speedNext").hidden = false;
+        gNum.textContent = fmt(S.down); gPhase.textContent = "وقف الاختبار قبل الرفع، بس سرعة التحميل انقاست."; speedVerdict();
+        return;
+      }
+      var m = e && e.message;
+      showManual(m === "cancel" ? "وقّفت الاختبار. اكتب الرقم من موقع ثاني تحت."
+        : m === "nodata" ? "الاتصال بموقع القياس بطيء جداً او مقطوع. جرّب الطريقة اليدوية تحت."
+        : "ما قدرت اوصل لموقع القياس من هالجوال. جرّب الطريقة اليدوية تحت.");
     });
   };
   $("#speedNext").onclick = function () {
