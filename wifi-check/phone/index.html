@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>فحص واي فاي البيت</title>
+<meta name="description" content="افحص واي فاي البيت من جوالك: سرعة الباقة، اختبار السرعة، الاجهزة المتصلة، زحمة القناة، وتعديل واحد تجربه.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: one narrow column, one step at a time, like reading the lights on a router */
+:root {
+  --bg: #f3f6f5;
+  --card: #ffffff;
+  --fg: #16201e;
+  --muted: #5b6b67;
+  --line: #d9e2df;
+  --accent: #0b7a64;
+  --accent-ink: #ffffff;
+  --ok: #138a4b;
+  --warn: #b46a00;
+  --bad: #c0362c;
+  --soft: #e5efec;
+  --f-body: "IBM Plex Sans Arabic", "Segoe UI", Tahoma, system-ui, sans-serif;
+  --f-num: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1513; --card: #16201d; --fg: #e4ece9; --muted: #93a39e; --line: #2a3733;
+    --accent: #3cc7a2; --accent-ink: #062019; --ok: #4fcf86; --warn: #f0a63a; --bad: #ff7a6e; --soft: #1d2a26;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1513; --card: #16201d; --fg: #e4ece9; --muted: #93a39e; --line: #2a3733;
+  --accent: #3cc7a2; --accent-ink: #062019; --ok: #4fcf86; --warn: #f0a63a; --bad: #ff7a6e; --soft: #1d2a26;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--f-body); font-size: 17px; line-height: 1.65;
+  padding-block: max(20px, env(safe-area-inset-top, 0px)) max(32px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+[hidden] { display: none !important; }
+main { max-width: 560px; margin: 0 auto; display: grid; gap: 16px; }
+header { display: grid; gap: 4px; }
+h1 { font-size: 1.5rem; margin: 0; line-height: 1.3; text-wrap: balance; }
+.sub { color: var(--muted); margin: 0; font-size: .95rem; }
+.leds { display: flex; gap: 6px; margin-top: 10px; direction: ltr; justify-content: flex-end; }
+.led { width: 26px; height: 6px; border-radius: 3px; background: var(--line); transition: background .3s; }
+.led.on { background: var(--accent); }
+.led.now { background: var(--accent); opacity: .45; }
+section.step { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 18px; display: grid; gap: 14px; }
+h2 { font-size: 1.15rem; margin: 0; text-wrap: balance; }
+.eyebrow { font-size: .78rem; color: var(--accent); font-weight: 700; letter-spacing: .02em; margin: 0 0 -8px; }
+p { margin: 0; }
+.hint { color: var(--muted); font-size: .92rem; }
+label { font-weight: 500; display: block; margin-bottom: 6px; }
+input.numin, input[type="text"] {
+  width: 100%; font: inherit; font-family: var(--f-num); font-size: 1.3rem; padding: 12px 14px;
+  border: 1.5px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); direction: ltr; text-align: center;
+}
+input[type="text"]:not(.numin) { font-family: var(--f-body); font-size: 1rem; direction: rtl; text-align: right; }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.btn {
+  appearance: none; border: 0; font: inherit; font-weight: 700; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink); padding: 14px 18px; border-radius: 12px; width: 100%;
+  text-align: center; text-decoration: none; display: block;
+}
+.btn.ghost { background: transparent; color: var(--accent); border: 1.5px solid var(--accent); }
+.btn:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.row > * { flex: 1 1 140px; }
+.choices { display: grid; gap: 8px; }
+.choice {
+  appearance: none; font: inherit; text-align: right; cursor: pointer; width: 100%;
+  background: var(--bg); color: var(--fg); border: 1.5px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  display: flex; justify-content: space-between; gap: 10px; align-items: center;
+}
+.choice small { color: var(--muted); }
+.choice[aria-pressed="true"] { border-color: var(--accent); background: var(--soft); }
+.choice[aria-pressed="true"]::after { content: "✓"; color: var(--accent); font-weight: 700; }
+.gauge { text-align: center; padding: 8px 0 0; }
+.gauge .num { font-family: var(--f-num); font-size: 3.2rem; line-height: 1; font-variant-numeric: tabular-nums; direction: ltr; display: inline-block; }
+.gauge .unit { color: var(--muted); font-size: .95rem; }
+.gauge .phase { font-size: .95rem; color: var(--muted); margin-top: 6px; }
+.bar { height: 8px; border-radius: 4px; background: var(--soft); overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { background: var(--bg); border-radius: 10px; padding: 10px 8px; text-align: center; }
+.stat b { display: block; font-family: var(--f-num); font-size: 1.25rem; direction: ltr; font-variant-numeric: tabular-nums; }
+.stat span { font-size: .8rem; color: var(--muted); }
+.verdict { border-inline-start: 4px solid var(--muted); padding: 8px 12px; background: var(--bg); border-radius: 8px; }
+.verdict.ok { border-color: var(--ok); } .verdict.warn { border-color: var(--warn); } .verdict.bad { border-color: var(--bad); }
+.verdict strong { display: block; }
+ol.guide { margin: 0; padding-inline-start: 1.3em; display: grid; gap: 6px; }
+ol.guide li::marker { color: var(--accent); font-weight: 700; }
+code, .ip { font-family: var(--f-num); direction: ltr; unicode-bidi: embed; background: var(--soft); padding: 1px 6px; border-radius: 5px; font-size: .9em; }
+.ips { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.ips a { font-family: var(--f-num); direction: ltr; text-align: center; padding: 10px; border: 1.5px solid var(--line); border-radius: 10px; color: var(--fg); text-decoration: none; background: var(--bg); }
+.summary { display: grid; gap: 8px; }
+.summary div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed var(--line); padding-bottom: 6px; }
+.summary div span:last-child { font-weight: 700; text-align: left; }
+.tip { background: var(--soft); border-radius: 12px; padding: 16px; display: grid; gap: 8px; }
+.tip .k { font-size: .8rem; color: var(--accent); font-weight: 700; }
+.tip .t { font-size: 1.15rem; font-weight: 700; line-height: 1.5; }
+.footer { color: var(--muted); font-size: .82rem; text-align: center; }
+.os-only { display: none; }
+body.android .os-android, body.ios .os-ios, body.other .os-other { display: block; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>فحص واي فاي البيت</h1>
+    <p class="sub">من جوالك، بدون كمبيوتر. خطوات قصيرة وبالآخر تعديل واحد تجربه.</p>
+    <div class="leds" aria-hidden="true" id="leds"></div>
+  </header>
+
+  <!-- 0 -->
+  <section class="step" data-step="0">
+    <p class="eyebrow">قبل لا نبدأ</p>
+    <h2>اشبك جوالك على واي فاي البيت الرئيسي</h2>
+    <ol class="guide">
+      <li>طفّي بيانات الجوال (4G/5G) عشان الاختبار يكون على الواي فاي بس.</li>
+      <li>وقّف اي فيديو او تحميل شغّال بالجوال.</li>
+      <li>خلك بالمكان اللي تستخدم فيه النت عادةً.</li>
+    </ol>
+    <p class="hint">الصفحة ما تغيّر اي اعداد بجوالك او بالراوتر. هي تفحص وتشرح، والتعديل تسويه انت اذا تبي.</p>
+    <p class="hint" id="connHint" hidden></p>
+    <button class="btn" data-next>يلا نبدأ</button>
+  </section>
+
+  <!-- 1 -->
+  <section class="step" data-step="1" hidden>
+    <p class="eyebrow">الخطوة 1 من 6</p>
+    <h2>كم سرعة باقتك؟</h2>
+    <div>
+      <label for="plan">السرعة بالميغابت (مكتوبة بالفاتورة او العقد)</label>
+      <input id="plan" type="text" class="numin" inputmode="decimal" autocomplete="off" placeholder="100">
+    </div>
+    <div class="row" id="planQuick"></div>
+    <p class="hint" id="planErr" hidden style="color:var(--bad)">اكتب رقم الباقة، مثال 100.</p>
+    <button class="btn" id="planNext">التالي</button>
+  </section>
+
+  <!-- 2 -->
+  <section class="step" data-step="2" hidden>
+    <p class="eyebrow">الخطوة 2 من 6</p>
+    <h2>اختبار السرعة</h2>
+    <div class="gauge">
+      <span class="num" id="gNum">0</span> <span class="unit">ميغابت</span>
+      <div class="phase" id="gPhase">جاهز. الاختبار ياخذ تقريباً 20 ثانية.</div>
+    </div>
+    <div class="bar"><i id="gBar"></i></div>
+    <div class="stats" id="stats" hidden>
+      <div class="stat"><b id="sDown">-</b><span>تحميل</span></div>
+      <div class="stat"><b id="sUp">-</b><span>رفع</span></div>
+      <div class="stat"><b id="sPing">-</b><span>استجابة ms</span></div>
+    </div>
+    <div class="verdict" id="speedVerdict" hidden></div>
+    <div id="manualSpeed" hidden>
+      <p>الاختبار التلقائي ما اشتغل على هالجوال. افتح موقع اختبار السرعة، وبعدين اكتب الرقم اللي يطلع لك:</p>
+      <div class="row" style="margin:10px 0">
+        <a class="btn ghost" href="https://fast.com" target="_blank" rel="noopener">fast.com</a>
+        <a class="btn ghost" href="https://speed.cloudflare.com" target="_blank" rel="noopener">speed.cloudflare.com</a>
+      </div>
+      <label for="manualDown">سرعة التحميل (ميغابت)</label>
+      <input id="manualDown" type="text" class="numin" inputmode="decimal" autocomplete="off" placeholder="45">
+    </div>
+    <button class="btn" id="runTest">ابدأ الاختبار</button>
+    <button class="btn ghost" id="stopTest" hidden>وقّف الاختبار واكتب الرقم بنفسي</button>
+    <button class="btn" id="speedNext" hidden>التالي</button>
+  </section>
+
+  <!-- 3 -->
+  <section class="step" data-step="3" hidden>
+    <p class="eyebrow">الخطوة 3 من 6</p>
+    <h2>قوة الاشارة ونوع الشبكة</h2>
+    <p class="hint">المتصفح ما يقدر يقرا الاشارة بنفسه، فشوفها من اعدادات جوالك:</p>
+    <div class="os-only os-android">
+      <ol class="guide">
+        <li>افتح الاعدادات ← الواي فاي.</li>
+        <li>اضغط على اسم شبكتك (او ايقونة الترس جنبها).</li>
+        <li>بتلقى: <b>قوة الاشارة</b>، و<b>التردد</b> (2.4 او 5 جيجاهرتز).</li>
+      </ol>
+    </div>
+    <div class="os-only os-ios">
+      <ol class="guide">
+        <li>شوف ايقونة الواي فاي فوق الشاشة: 3 خطوط = قوية، خطين = متوسطة، خط واحد = ضعيفة.</li>
+        <li>الايفون ما يعرض التردد. اذا قايمة الواي فاي فيها شبكتين باسمك (وحدة فيها 5G) اختار الجواب حسب اللي شابك عليها.</li>
+      </ol>
+    </div>
+    <div class="os-only os-other">
+      <ol class="guide"><li>افتح اعدادات الواي فاي واضغط على اسم شبكتك وشوف قوة الاشارة والتردد.</li></ol>
+    </div>
+    <p><b>قوة الاشارة؟</b></p>
+    <div class="choices" data-q="signal">
+      <button class="choice" data-v="strong">قوية <small>ممتازة / 3 خطوط</small></button>
+      <button class="choice" data-v="mid">متوسطة <small>جيدة / خطين</small></button>
+      <button class="choice" data-v="weak">ضعيفة <small>خط واحد</small></button>
+    </div>
+    <p><b>التردد؟</b></p>
+    <div class="choices" data-q="band">
+      <button class="choice" data-v="5">5 جيجاهرتز</button>
+      <button class="choice" data-v="2.4">2.4 جيجاهرتز</button>
+      <button class="choice" data-v="?">ما اعرف</button>
+    </div>
+    <p><b>تشوف بقايمة الواي فاي شبكة ثانية بنفس اسم شبكتك (مثلاً فيها 5G)؟</b></p>
+    <div class="choices" data-q="dual">
+      <button class="choice" data-v="yes">ايه</button>
+      <button class="choice" data-v="no">لا</button>
+    </div>
+    <button class="btn" data-next data-need="signal,band,dual">التالي</button>
+  </section>
+
+  <!-- 4 -->
+  <section class="step" data-step="4" hidden>
+    <p class="eyebrow">الخطوة 4 من 6</p>
+    <h2>التطبيقات اللي تسحب نت بالخلفية</h2>
+    <div class="os-only os-android">
+      <ol class="guide">
+        <li>الاعدادات ← الشبكة والانترنت (او الاتصالات) ← استخدام البيانات.</li>
+        <li>اختار <b>استخدام بيانات الواي فاي</b>.</li>
+        <li>اول التطبيقات باللستة هي اللي سحبت اكثر شي.</li>
+      </ol>
+    </div>
+    <div class="os-only os-ios">
+      <p>الايفون ما يعرض استهلاك الواي فاي لكل تطبيق، بس هذي اكثر الاشياء اللي تسحب بالخلفية:</p>
+      <ol class="guide">
+        <li>صور iCloud: الاعدادات ← اسمك ← iCloud ← الصور (لو قاعد يرفع، بيكتب كم صورة باقي).</li>
+        <li>تحديث التطبيقات: الاعدادات ← App Store ← تحديثات التطبيقات.</li>
+        <li>تحديث النظام: الاعدادات ← عام ← تحديث البرامج.</li>
+      </ol>
+    </div>
+    <div class="os-only os-other"><p>افتح اعدادات استخدام البيانات بجهازك وشوف اكثر التطبيقات استهلاك على الواي فاي.</p></div>
+    <p class="hint">وتذكّر الاجهزة الثانية بالبيت: تلفزيون يشغّل فيديو، بلايستيشن يحمّل لعبة، كاميرات مراقبة.</p>
+    <p><b>لقيت شي يسحب نت كثير الحين؟</b></p>
+    <div class="choices" data-q="bg">
+      <button class="choice" data-v="yes">ايه، فيه شي يحمّل او يرفع</button>
+      <button class="choice" data-v="no">لا، ما لقيت شي</button>
+    </div>
+    <div id="bgNameWrap" hidden>
+      <label for="bgName">وش هو؟ (اختياري)</label>
+      <input id="bgName" type="text" placeholder="مثال: صور iCloud، بلايستيشن">
+    </div>
+    <button class="btn" data-next data-need="bg">التالي</button>
+  </section>
+
+  <!-- 5 -->
+  <section class="step" data-step="5" hidden>
+    <p class="eyebrow">الخطوة 5 من 6</p>
+    <h2>الاجهزة المتصلة بالراوتر</h2>
+    <p>افتح صفحة الراوتر. جرّب العناوين هذي بالترتيب لين وحدة تفتح:</p>
+    <div class="ips" id="ips"></div>
+    <ol class="guide">
+      <li>اسم المستخدم وكلمة السر مكتوبين على ملصق تحت الراوتر (غالباً <code>admin</code>).</li>
+      <li>دوّر على قسم اسمه: <code>Connected Devices</code> او <code>Device List</code> او <code>DHCP Clients</code> او "الاجهزة المتصلة".</li>
+      <li>كل سطر = جهاز. قارن الاسماء مع اجهزة البيت.</li>
+      <li><b>لا تغيّر شي بالصفحة</b>، بس اقرا وارجع هنا.</li>
+    </ol>
+    <p class="hint">اذا ما فتح ولا عنوان: بعض الراوترات لها تطبيق جوال (مكتوب اسمه على الملصق او العلبة) يعرض الاجهزة بسهولة.</p>
+    <div>
+      <label for="devCount">كم جهاز لقيت؟ (0 اذا ما قدرت تدخل)</label>
+      <input id="devCount" type="text" class="numin" inputmode="numeric" autocomplete="off" placeholder="8">
+    </div>
+    <p><b>تعرف كل الاجهزة اللي باللستة؟</b></p>
+    <div class="choices" data-q="known">
+      <button class="choice" data-v="yes">ايه، كلها اجهزتنا</button>
+      <button class="choice" data-v="no">لا، فيه اجهزة غريبة</button>
+      <button class="choice" data-v="skip">ما قدرت ادخل</button>
+    </div>
+    <p><b>وانت بقايمة الواي فاي بالجوال: كم شبكة جيران تشوف اشارتها قوية؟</b></p>
+    <p class="hint">هذا يبين اذا الجو مزدحم حولك. الشبكات اللي اشارتها خط واحد ما تحسب.</p>
+    <div class="choices" data-q="neigh">
+      <button class="choice" data-v="few">من 0 الى 3</button>
+      <button class="choice" data-v="some">من 4 الى 7</button>
+      <button class="choice" data-v="many">8 او اكثر</button>
+    </div>
+    <button class="btn" data-next data-need="known,neigh">شوف النتيجة</button>
+  </section>
+
+  <!-- 6 -->
+  <section class="step" data-step="6" hidden>
+    <p class="eyebrow">الخطوة 6 من 6</p>
+    <h2>النتيجة ببساطة</h2>
+    <div class="summary" id="summary"></div>
+    <div class="tip">
+      <span class="k">التعديل اللي اقترح تجربه</span>
+      <span class="t" id="tipText"></span>
+      <span class="hint" id="tipWhy"></span>
+      <div id="tipAction"></div>
+    </div>
+    <p class="hint">بعد ما تجرب التعديل، عيد الفحص وقارن الرقم.</p>
+    <button class="btn ghost" id="restart">عيد الفحص</button>
+  </section>
+
+  <p class="footer">اختبار السرعة يستهلك تقريباً 100 ميغابايت ويتم عن طريق Cloudflare. الصفحة ما ترسل اجاباتك لأي مكان.</p>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+  var steps = $$("section.step");
+  var S = { plan: 0, down: 0, up: 0, ping: 0, jitter: 0, auto: false, answers: {} };
+  var GATEWAYS = ["192.168.1.1", "192.168.0.1", "192.168.100.1", "192.168.8.1", "10.0.0.1", "192.168.1.254"];
+
+  // نوع الجوال لعرض الخطوات المناسبة
+  var ua = navigator.userAgent || "";
+  document.body.classList.add(/android/i.test(ua) ? "android" : (/iphone|ipad|ipod/i.test(ua) || (/Macintosh/.test(ua) && "ontouchend" in document)) ? "ios" : "other");
+
+  // اذا المتصفح يعرف نوع الاتصال (اندرويد كروم)
+  var conn = navigator.connection;
+  if (conn && conn.type && conn.type !== "wifi" && conn.type !== "unknown") {
+    var h = $("#connHint"); h.hidden = false; h.style.color = "var(--bad)";
+    h.textContent = "يبين ان جوالك مو شابك على الواي فاي الحين. اشبك على واي فاي البيت قبل لا تكمل.";
+  }
+
+  // مؤشر الخطوات
+  var leds = $("#leds");
+  for (var i = 1; i < steps.length; i++) leds.appendChild(document.createElement("span")).className = "led";
+  function show(n) {
+    steps.forEach(function (s, k) { s.hidden = k !== n; });
+    $$(".led", leds).forEach(function (l, k) { l.className = "led" + (k + 1 < n ? " on" : k + 1 === n ? " now" : ""); });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (n === 6) renderResult();
+  }
+  var cur = 0;
+  function next() { cur = Math.min(cur + 1, steps.length - 1); show(cur); }
+
+  // اختيارات
+  $$(".choices").forEach(function (box) {
+    box.addEventListener("click", function (e) {
+      var b = e.target.closest(".choice"); if (!b) return;
+      $$(".choice", box).forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      S.answers[box.dataset.q] = b.dataset.v;
+      if (box.dataset.q === "bg") $("#bgNameWrap").hidden = b.dataset.v !== "yes";
+      refreshNeeds();
+    });
+    $$(".choice", box).forEach(function (x) { x.setAttribute("aria-pressed", "false"); x.type = "button"; });
+  });
+  function refreshNeeds() {
+    $$("[data-need]").forEach(function (btn) {
+      btn.disabled = btn.dataset.need.split(",").some(function (q) { return !S.answers[q]; });
+    });
+  }
+  refreshNeeds();
+  $$("[data-next]").forEach(function (b) { b.addEventListener("click", next); });
+
+  // الخطوة 1
+  [50, 100, 300, 500, 1000].forEach(function (v) {
+    var b = document.createElement("button"); b.type = "button"; b.className = "choice";
+    b.style.justifyContent = "center"; b.textContent = v; b.style.fontFamily = "var(--f-num)";
+    b.onclick = function () { $("#plan").value = v; };
+    $("#planQuick").appendChild(b);
+  });
+  function num(v) {
+    v = String(v || "").replace(/[٠-٩]/g, function (d) { return d.charCodeAt(0) - 0x660; }).replace(",", ".").trim();
+    var n = parseFloat(v); return isFinite(n) ? n : NaN;
+  }
+  $("#planNext").onclick = function () {
+    var n = num($("#plan").value);
+    if (!(n > 0)) { $("#planErr").hidden = false; return; }
+    $("#planErr").hidden = true; S.plan = n; next();
+  };
+
+  // الخطوة 2: اختبار السرعة
+  var CF = "https://speed.cloudflare.com";
+  var gNum = $("#gNum"), gPhase = $("#gPhase"), gBar = $("#gBar");
+  function mbps(bytes, ms) { return ms > 0 ? (bytes * 8) / (ms / 1000) / 1e6 : 0; }
+  function fmt(n) { return n >= 100 ? Math.round(n) : (Math.round(n * 10) / 10); }
+
+  // كل طلب له مهلة، عشان ما يعلق الاختبار لو طلب واحد وقف
+  function fetchT(url, opts, ms) {
+    opts = opts || {};
+    var c = "AbortController" in window ? new AbortController() : null;
+    if (c) opts.signal = c.signal;
+    var t;
+    return Promise.race([
+      fetch(url, opts),
+      new Promise(function (_, rej) { t = setTimeout(function () { if (c) try { c.abort(); } catch (e) {} rej(new Error("timeout")); }, ms); })
+    ]).then(function (r) { clearTimeout(t); return { res: r, ctrl: c }; }, function (e) { clearTimeout(t); throw e; });
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  var cancelled = false;
+
+  function pingTest() {
+    var times = [], fails = 0, i = 0;
+    function one() {
+      var t = performance.now();
+      return fetchT(CF + "/__down?bytes=0&r=" + Math.random(), { cache: "no-store" }, 3000)
+        .then(function (x) { return x.res.arrayBuffer(); })
+        .then(function () { times.push(performance.now() - t); }, function () { fails++; });
+    }
+    function loop() { return (i++ < 8 && fails < 3 && !cancelled) ? one().then(loop) : Promise.resolve(); }
+    return loop().then(function () {
+      if (!times.length) throw new Error("ping");
+      if (times.length > 2) times.shift(); // اول طلب فيه فتح الاتصال
+      times.sort(function (a, b) { return a - b; });
+      var med = times[Math.floor(times.length / 2)];
+      var j = 0; for (var k = 1; k < times.length; k++) j += Math.abs(times[k] - times[k - 1]);
+      return { ping: Math.round(med), jitter: Math.round(j / Math.max(1, times.length - 1)) };
+    });
+  }
+
+  // التحميل: ينتهي بوقت ثابت مهما صار، ويحسب اللي وصل لين ذاك الوقت
+  function downloadTest(seconds) {
+    var total = 0, start = performance.now(), done = false, ctrls = [];
+    var limit = seconds * 1000;
+    function stream() {
+      if (done || cancelled) return Promise.resolve();
+      return fetchT(CF + "/__down?bytes=25000000&r=" + Math.random(), { cache: "no-store" }, 8000)
+        .then(function (x) {
+          if (x.ctrl) ctrls.push(x.ctrl);
+          if (!x.res.ok) throw new Error("http " + x.res.status);
+          if (!x.res.body || !x.res.body.getReader) return x.res.arrayBuffer().then(function (b) { if (!done) total += b.byteLength; });
+          var rd = x.res.body.getReader();
+          function pump() {
+            if (done) { try { rd.cancel(); } catch (e) {} return; }
+            return rd.read().then(function (r) { if (r.done) return; if (!done) total += r.value.byteLength; return pump(); });
+          }
+          return pump();
+        })
+        .catch(function () { return sleep(400); })
+        .then(function () { return stream(); });
+    }
+    for (var s = 0; s < 4; s++) stream();
+    return new Promise(function (resolve, reject) {
+      var timer = setInterval(function () {
+        var el = performance.now() - start;
+        gNum.textContent = fmt(mbps(total, el));
+        gBar.style.width = Math.min(70, 20 + (el / limit) * 50) + "%";
+        gPhase.textContent = "اقيس سرعة التحميل... باقي " + Math.max(0, Math.ceil((limit - el) / 1000)) + " ثانية";
+        var finish = el >= limit || cancelled || (el > 6000 && total === 0);
+        if (!finish) return;
+        clearInterval(timer); done = true;
+        ctrls.forEach(function (c) { try { c.abort(); } catch (e) {} });
+        if (cancelled) reject(new Error("cancel"));
+        else if (total === 0) reject(new Error("nodata"));
+        else resolve(mbps(total, el));
+      }, 200);
+    });
+  }
+
+  // الرفع: قطع صغيرة تكبر حسب السرعة، والعداد يتحرك، وينتهي بوقت ثابت
+  function uploadTest(seconds) {
+    var total = 0, start = performance.now(), done = false, chunk = 256 * 1024;
+    var limit = seconds * 1000;
+    function stream() {
+      if (done || cancelled) return Promise.resolve();
+      var size = chunk, t = performance.now();
+      var blob = new Blob([new Uint8Array(size)], { type: "text/plain" });
+      return fetchT(CF + "/__up?r=" + Math.random(), { method: "POST", body: blob, cache: "no-store" }, Math.max(1000, limit - (t - start) + 500))
+        .then(function () {
+          if (done) return;
+          total += size;
+          if (performance.now() - t < 1000 && chunk < 4 * 1024 * 1024) chunk *= 2;
+        }, function () { return sleep(300); })
+        .then(function () { return stream(); });
+    }
+    for (var s = 0; s < 3; s++) stream();
+    return new Promise(function (resolve) {
+      var timer = setInterval(function () {
+        var el = performance.now() - start;
+        gNum.textContent = fmt(mbps(total, el));
+        gBar.style.width = Math.min(100, 70 + (el / limit) * 30) + "%";
+        gPhase.textContent = "اقيس سرعة الرفع... باقي " + Math.max(0, Math.ceil((limit - el) / 1000)) + " ثانية";
+        if (el < limit && !cancelled) return;
+        clearInterval(timer); done = true;
+        resolve(mbps(total, el));
+      }, 200);
+    });
+  }
+
+  function speedVerdict() {
+    var r = Math.round((100 * S.down) / S.plan), v = $("#speedVerdict"); v.hidden = false;
+    var cls = r >= 80 ? "ok" : r >= 50 ? "warn" : "bad";
+    var msg = r >= 80 ? "ممتاز. تحصل اغلب سرعة باقتك." : r >= 50 ? "مقبول. اقل من باقتك بشكل واضح، وهذا يصير كثير على الواي فاي." : "السرعة اقل من نص باقتك.";
+    v.className = "verdict " + cls;
+    v.innerHTML = "<strong>تحصل " + r + "% من باقتك (" + fmt(S.down) + " من " + S.plan + " ميغابت)</strong>" + msg;
+  }
+
+  function showManual(reason) {
+    gPhase.textContent = reason;
+    $("#manualSpeed").hidden = false; $("#runTest").hidden = true; $("#stopTest").hidden = true; $("#speedNext").hidden = false;
+  }
+
+  $("#stopTest").onclick = function () { cancelled = true; };
+  $("#runTest").onclick = function () {
+    var btn = this; btn.disabled = true; btn.textContent = "جاري الاختبار...";
+    cancelled = false; $("#stopTest").hidden = false;
+    gPhase.textContent = "اقيس الاستجابة..."; gBar.style.width = "5%";
+    pingTest().then(function (p) {
+      S.ping = p.ping; S.jitter = p.jitter;
+      $("#stats").hidden = false; $("#sPing").textContent = p.ping;
+      gBar.style.width = "20%";
+      return downloadTest(10);
+    }).then(function (d) {
+      S.down = d; $("#sDown").textContent = fmt(d);
+      return uploadTest(8);
+    }).then(function (u) {
+      S.up = u; S.auto = true; $("#sUp").textContent = u >= 0.1 ? fmt(u) : "اقل من 0.1";
+      gNum.textContent = fmt(S.down); gPhase.textContent = "خلص الاختبار. الرقم الكبير هو سرعة التحميل."; gBar.style.width = "100%";
+      $("#stopTest").hidden = true; speedVerdict(); btn.hidden = true; $("#speedNext").hidden = false;
+    }).catch(function (e) {
+      if (S.down > 0) { // التحميل انقاس، نكمل فيه
+        S.auto = true; $("#stopTest").hidden = true; btn.hidden = true; $("#speedNext").hidden = false;
+        gNum.textContent = fmt(S.down); gPhase.textContent = "وقف الاختبار قبل الرفع، بس سرعة التحميل انقاست."; speedVerdict();
+        return;
+      }
+      var m = e && e.message;
+      showManual(m === "cancel" ? "وقّفت الاختبار. اكتب الرقم من موقع ثاني تحت."
+        : m === "nodata" ? "الاتصال بموقع القياس بطيء جداً او مقطوع. جرّب الطريقة اليدوية تحت."
+        : "ما قدرت اوصل لموقع القياس من هالجوال. جرّب الطريقة اليدوية تحت.");
+    });
+  };
+  $("#speedNext").onclick = function () {
+    if (!S.auto) {
+      var n = num($("#manualDown").value);
+      if (!(n >= 0) || $("#manualDown").value === "") { $("#manualDown").focus(); return; }
+      S.down = n;
+    }
+    next();
+  };
+
+  // الخطوة 5: عناوين الراوتر
+  GATEWAYS.forEach(function (ip) {
+    var a = document.createElement("a"); a.href = "http://" + ip; a.target = "_blank"; a.rel = "noopener"; a.textContent = ip;
+    $("#ips").appendChild(a);
+  });
+
+  // النتيجة
+  function routerButtons() {
+    return "<div class='ips' style='margin-top:6px'>" + GATEWAYS.slice(0, 4).map(function (ip) {
+      return "<a href='http://" + ip + "' target='_blank' rel='noopener'>" + ip + "</a>";
+    }).join("") + "</div><p class='hint' style='margin-top:6px'>انت اللي تسوي التعديل وتحفظه. بعد الحفظ الراوتر ممكن يفصل دقيقة، عادي.</p>";
+  }
+  function renderResult() {
+    var A = S.answers, ratio = S.plan ? Math.round((100 * S.down) / S.plan) : 0;
+    var dev = num($("#devCount").value); if (!(dev >= 0)) dev = 0;
+    var bgName = $("#bgName").value.trim();
+    var sigTxt = { strong: "قوية", mid: "متوسطة", weak: "ضعيفة" }[A.signal];
+    var bandTxt = { "5": "5 جيجا", "2.4": "2.4 جيجا", "?": "ما نعرف" }[A.band];
+    var neighTxt = { few: "هادي", some: "متوسط", many: "مزدحم" }[A.neigh];
+    var rows = [
+      ["سرعتك من الباقة", fmt(S.down) + " من " + S.plan + " (" + ratio + "%)"],
+      ["الرفع", S.up ? fmt(S.up) + " ميغابت" : "ما انقاس"],
+      ["الاستجابة", S.ping ? S.ping + " ms" : "ما انقاست"],
+      ["الاشارة", sigTxt],
+      ["التردد", bandTxt],
+      ["شي يسحب بالخلفية", A.bg === "yes" ? (bgName || "ايه") : "لا"],
+      ["الاجهزة المتصلة", A.known === "skip" ? "ما قدرنا نشوف" : dev + (A.known === "no" ? " (فيه غريب)" : "")],
+      ["الجو حولك", neighTxt]
+    ];
+    $("#summary").innerHTML = rows.map(function (r) { return "<div><span>" + r[0] + "</span><span>" + esc(r[1]) + "</span></div>"; }).join("");
+
+    // تعديل واحد بس، حسب الاهمية
+    var tip, why, act = "";
+    if (S.down <= 0.1) {
+      tip = "طفّي الراوتر 30 ثانية وشغّله، وانتظر دقيقتين وعيد الفحص.";
+      why = "السرعة صفر تقريباً، يعني الاتصال بالنت نفسه فيه مشكلة.";
+    } else if (A.known === "no") {
+      tip = "غيّر كلمة سر الواي فاي من صفحة الراوتر (قسم Wireless او Security).";
+      why = "فيه اجهزة ما تعرفها، وكل جهاز غريب ياخذ من سرعتك. بعد التغيير بتحتاج تدخل الكلمة الجديدة باجهزتك."; act = routerButtons();
+    } else if (A.signal === "weak") {
+      tip = "قرّب من الراوتر، او حط الراوتر بمكان عالي ووسط البيت بعيد عن الجدران والمطبخ.";
+      why = "اشارتك ضعيفة، وهذا اكبر سبب للبطء. جرّب الفحص وانت جنب الراوتر عشان تتأكد.";
+    } else if (A.bg === "yes") {
+      tip = "وقّف او أجّل " + (bgName ? esc(bgName) : "اللي يحمّل بالخلفية") + "، وعيد الفحص.";
+      why = "اي تحميل شغّال يتقاسم نفس الباقة معك.";
+    } else if (A.band === "2.4" && A.dual === "yes") {
+      tip = "اشبك على شبكة الـ 5 جيجا بدل 2.4 (نفس الاسم او فيها 5G).";
+      why = "2.4 جيجا ابطأ وازحم. 5 جيجا اسرع بكثير وانت داخل البيت.";
+    } else if (A.neigh === "many" || (A.neigh === "some" && ratio < 50)) {
+      tip = "غيّر قناة الواي فاي بالراوتر: جرّب 1 او 6 او 11 لشبكة 2.4، او خلها على Auto.";
+      why = "حولك شبكات جيران كثيرة على نفس الموجات وتزاحمك."; act = routerButtons();
+    } else if (ratio < 50) {
+      tip = "جرّب الفحص وانت جنب الراوتر. اذا بقت السرعة اقل من نص الباقة، كلّم شركة الاتصالات.";
+      why = "الاشارة والزحمة زينة، فالبطء غالباً من الخط نفسه.";
+    } else {
+      tip = "ما تحتاج تغيّر شي. بس خل الراوتر بمكان عالي ومكشوف.";
+      why = "كل شي ضمن الطبيعي. الواي فاي عادةً يعطي 50% الى 80% من الباقة.";
+    }
+    $("#tipText").innerHTML = tip; $("#tipWhy").textContent = "السبب: " + why; $("#tipAction").innerHTML = act;
+  }
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+
+  $("#restart").onclick = function () { location.reload(); };
+  show(0);
+})();
+</script>
+</body>
+</html>
